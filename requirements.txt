@@ -11,5 +11,5 @@ SciencePlots>=2.1
 jupyterlab>=4.0
 ipykernel>=6.0
 
-# QMCPACK output parser — install from source (not on PyPI):
+# QMCPACK output parser — install it from source (not on PyPI):
 # pip install git+https://github.com/Paul-St-Young/harvest_qmcpack.git
