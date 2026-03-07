@@ -24,6 +24,7 @@ Figures/
 
 # Old/backup versions
 backup/
+context.md
 
 # Large QMC raw data files
 *.h5
