@@ -1,0 +1,15 @@
+# Core scientific stack
+numpy>=1.24
+scipy>=1.10
+matplotlib>=3.7
+h5py>=3.8
+
+# Publication-quality plots (LaTeX-style)
+SciencePlots>=2.1
+
+# Jupyter environment
+jupyterlab>=4.0
+ipykernel>=6.0
+
+# QMCPACK output parser — install from source (not on PyPI):
+# pip install git+https://github.com/Paul-St-Young/harvest_qmcpack.git

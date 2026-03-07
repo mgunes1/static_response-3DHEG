@@ -1,0 +1,40 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+type: software
+title: "Static density-density response of the 3D homogeneous electron gas via DMC"
+authors:
+  - family-names: "Güneş"
+    given-names: "M."
+repository-code: "https://github.com/moegunes/static_response-3DHEG"
+license: MIT
+date-released: "2026-03-07"
+abstract: >-
+  Analysis code for computing the static density-density response function
+  chi(q) of the three-dimensional homogeneous electron gas using Diffusion
+  Monte Carlo (QMCPACK). Covers r_s = 2, 5, 10, 15, 20, 25 with finite-size
+  corrections and comparison to Moroni et al. and Corradini et al. parametrizations.
+references:
+  - type: article
+    title: "Static response from quantum Monte Carlo calculations"
+    authors:
+      - family-names: "Moroni"
+        given-names: "S."
+      - family-names: "Ceperley"
+        given-names: "D. M."
+      - family-names: "Senatore"
+        given-names: "G."
+    journal: "Physical Review Letters"
+    volume: 75
+    pages: 689
+    year: 1995
+    doi: "10.1103/PhysRevLett.75.689"
+  - type: article
+    title: "QMCPACK: an open source ab initio quantum Monte Carlo package for the electronic structure of atoms, molecules and solids"
+    authors:
+      - family-names: "Kim"
+        given-names: "J."
+    journal: "Journal of Physics: Condensed Matter"
+    volume: 30
+    pages: 195901
+    year: 2018
+    doi: "10.1088/1361-648X/aab9c3"
