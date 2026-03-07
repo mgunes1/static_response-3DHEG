@@ -141,8 +141,8 @@ def get_chi0_q(
     chi_q : array   — DFT chi_0 for each q
     dchi_q : array  — (zeros — DFT has no stochastic error)
     """
-    from io_utils import get_energy_pwscf
-    from physics import get_gas_params, guess_alpha2
+    from .io_utils import get_energy_pwscf
+    from .physics import get_gas_params, guess_alpha2
 
     chi_q = np.zeros(len(qidx_list))
     dchi_q = np.zeros(len(qidx_list))
@@ -183,8 +183,8 @@ def get_chi_q(main_dir, Ne, rs, vq_list, qidx_list, verbose=False, vq_fit="quadr
     dchi_q : array
     fit_quality : list of dict
     """
-    from io_utils import load_or_compute_E
-    from physics import get_gas_params
+    from .io_utils import load_or_compute_E
+    from .physics import get_gas_params
 
     n0 = get_gas_params(rs, Ne)[1]
     E_all, dE_all = load_or_compute_E(main_dir, rs, Ne, qidx_list, vq_list)
@@ -231,7 +231,7 @@ def get_correction(main_dir, qidxl, rs, Ne, vq_list, qidx_list):
     vq_list, qidx_list : list
         Full vq / q lists for DFT chi0 fit.
     """
-    from physics import chi0q, get_qs
+    from .physics import chi0q, get_qs
 
     ql = get_qs(qidxl, Ne, rs)
     chi0_infty = chi0q(ql, Ne, rs)
@@ -287,7 +287,7 @@ def get_chi(
     boot_err : array     — bootstrap standard deviation
     fit_quality : list of dict
     """
-    from physics import FS_correct, get_gas_params
+    from .physics import FS_correct, get_gas_params
 
     if vq_list_dft is None:
         vq_list_dft = vql
@@ -405,7 +405,7 @@ def analyze_vq_range(
     Returns a list of per-q dicts with keys: q, q_over_kF, chi_ref_over_n0,
     delta_E, dE, snr, acceptable, vq_max_suggested.
     """
-    from physics import (
+    from .physics import (
         G_Moroni,
         chi0q,
         corradini_pz,

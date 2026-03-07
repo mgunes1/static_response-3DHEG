@@ -7,6 +7,7 @@ and caching the full energy matrix E(q, vq).
 
 import os
 import re
+import warnings
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -222,7 +223,7 @@ def get_variance_for_run(
     -------
     (var, dvar) or (None, None) if the file is missing.
     """
-    from physics import guess_alpha2
+    from .physics import guess_alpha2
 
     alpha = guess_alpha2(rs, Ne, q)
     ts = rs / (12 * Ne**0.5) if wf == "sjb" else rs / 20
@@ -296,7 +297,7 @@ def get_E_all(main_dir, rs, Ne):
     qidx_list : list of [qx, qy, qz]
     vq_list : sorted list of float
     """
-    from physics import guess_alpha2
+    from .physics import guess_alpha2
 
     qidx_list, vq_list = collect_q_and_vq(main_dir, rs, Ne)
     n_q, n_v = len(qidx_list), len(vq_list)
@@ -385,6 +386,13 @@ def load_or_compute_E(main_dir, rs, Ne, qidx_list, vq_list):
             )
 
     # Rebuild cache with ALL available data
+    warnings.warn(
+        f"Pre-computed cache not found at '{cache}'. "
+        "Attempting to rebuild from raw QMC data in main_dir. "
+        "Note: This will not work unless you have access to the raw data. ",
+        UserWarning,
+        stacklevel=2,
+    )
     get_E_all(main_dir, rs, Ne)
 
     data = np.load(cache, allow_pickle=True)
@@ -425,7 +433,8 @@ def load_raw_blocks(
         Per-block energies E/Ne after equilibration.
     """
     import h5py
-    from physics import guess_alpha2
+
+    from .physics import guess_alpha2
 
     ts = rs / (12 * Ne**0.5) if wf == "sjb" else rs / 20
     ss = 3 if wf == "sjb" else 2

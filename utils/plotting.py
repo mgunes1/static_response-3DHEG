@@ -34,7 +34,7 @@ def plot_chi(
     fit_quality : list of dicts (from get_chi_q) — flags unreliable points
     **kwargs : forwarded to the data marker plot
     """
-    from physics import (
+    from .physics import (
         get_chi_corradini,
         get_chi_Moroni,
         get_chi_RPA,
@@ -133,8 +133,8 @@ def plot_E_of_vq(
     """
     from scipy.optimize import curve_fit
 
-    from io_utils import get_energy, get_energy_pwscf, qmc_params_default
-    from physics import (
+    from .io_utils import get_energy, get_energy_pwscf, qmc_params_default
+    from .physics import (
         anal_chi02,
         get_chi_Moroni,
         get_gas_params,
@@ -270,8 +270,8 @@ def plot_variance(
     -------
     ax, x_vals, var_vals, dvar_vals
     """
-    from io_utils import get_variance_for_run
-    from physics import get_gas_params, get_qs, guess_alpha2
+    from .io_utils import get_variance_for_run
+    from .physics import get_gas_params, get_qs, guess_alpha2
 
     if ax is None:
         fig, ax = plt.subplots(dpi=150)
