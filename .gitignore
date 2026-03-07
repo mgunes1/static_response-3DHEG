@@ -5,7 +5,7 @@ venv/
 # VS Code
 .vscode/
 vscode/
-pp.code-workspace
+#pp.code-workspace
 
 # Python cache
 __pycache__/
