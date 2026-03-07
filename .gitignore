@@ -5,6 +5,7 @@ venv/
 # VS Code
 .vscode/
 vscode/
+pp.code-workspace
 
 # Python cache
 __pycache__/
@@ -31,3 +32,6 @@ backup/
 # OS
 .DS_Store
 Thumbs.db
+
+#activate this after publishing
+CITATION.cff
