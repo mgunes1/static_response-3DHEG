@@ -1,0 +1,10 @@
+.venv/
+vscode/
+__pycache__/
+*.pyc
+*.pyo
+Figures/
+backup/
+.ipynb_checkpoints/
+.DS_Store
+*.h5

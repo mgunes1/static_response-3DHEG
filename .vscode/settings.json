@@ -1,0 +1,29 @@
+{
+    // Exclude large directories from VS Code file watching, search, and Pylance indexing.
+    // This is critical on CephFS where metadata operations are 10-100x slower than local disk.
+    "files.watcherExclude": {
+        "**/.venv/**": true,
+        "**/vscode/**": true,
+        "**/__pycache__/**": true,
+        "**/.git/**": true
+    },
+    "files.exclude": {
+        "**/.venv": true,
+        "**/vscode": true,
+        "**/__pycache__": true
+    },
+    "search.exclude": {
+        "**/.venv/**": true,
+        "**/vscode/**": true,
+        "**/__pycache__/**": true
+    },
+    // Tell Pylance not to index the vscode/ and .venv/ directories
+    "python.analysis.exclude": [
+        "**/vscode/**",
+        "**/.venv/**"
+    ],
+    // Reduce Pylance background analysis to save CPU/IO
+    "python.analysis.diagnosticMode": "openFilesOnly",
+    // Point to the correct Python interpreter
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python"
+}
