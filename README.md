@@ -1,6 +1,6 @@
-# Static Density-Density Response of the 3D Homogeneous Electron Gas via DMC
+# Static response of the 3D HEG using diffusion Monte Carlo
 
-Analysis code for computing the **static density-density response function** χ(q) of the three-dimensional **homogeneous electron gas (3D HEG)** via **Diffusion Monte Carlo (DMC)** ([QMCPACK](https://qmcpack.org)), with DFT-based finite-size corrections from [Quantum ESPRESSO](https://www.quantum-espresso.org).
+Analysis code for computing the **static density-density response function** χ(q) of the three-dimensional **homogeneous electron gas (3D HEG)** via **Diffusion Monte Carlo (DMC)** ([QMCPACK](https://qmcpack.org)). Trial wavefunctions produced by DFT from [Quantum ESPRESSO](https://www.quantum-espresso.org).
 
 ---
 
@@ -24,7 +24,7 @@ so χ(q)/n₀ is the quadratic coefficient of a polynomial fit to E(v_q). DMC en
 
 ### Finite-size correction
 
-DMC energies are computed in a finite simulation cell of N_e electrons. The finite-size error in χ is corrected using the known analytic form of the non-interacting finite-size bias, evaluated via DFT (Quantum ESPRESSO) single-particle energies at the same v_q values:
+DMC energies are computed in a finite simulation cell of N_e electrons. The finite-size error in χ is corrected using the known analytic form of the non-interacting finite-size bias:
 
 ```
 χ⁻¹(q; ∞) = χ⁻¹(q; N_e) + [χ₀⁻¹(q; ∞) − χ₀⁻¹(q; N_e)]
@@ -75,12 +75,7 @@ jupyter lab low-q.ipynb
 
 ## Data Requirements
 
-Pre-computed energy matrices for all (r_s, N_e) datasets are provided in `output/` as `.npz` files. **No raw QMC data is needed to reproduce the figures** — simply clone the repository and run the notebook cells.
-
-> **Note for authors:** raw QMCPACK output files live on the Flatiron cluster at
-> `/mnt/ceph/users/mgunes/HEG_dmc/static_response/`. Setting `main_dir` to that path
-> allows `load_or_compute_E` to rebuild caches from scratch. A warning is issued if
-> the cache is missing and the raw data directory cannot be reached.
+Pre-computed energy matrices for all (r_s, N_e) datasets are provided in `output/` as `.npz` files. **No raw QMC data is needed to reproduce the figures** — simply clone the repository and run the notebook cells. Running the analysis for cases where datasets are not available, the code will try to build `E_all.npz` from scratch. Note that unless you have access to the workflow, this is impossible to do.
 
 ---
 
@@ -126,22 +121,3 @@ fig.savefig('chi_rs5.pdf', bbox_inches='tight')
 3. Kim, J. et al. (2018). *QMCPACK: an open source ab initio quantum Monte Carlo package.* **J. Phys.: Condens. Matter 30**, 195901. https://doi.org/10.1088/1361-648X/aab9c3
 
 4. Giannozzi, P. et al. (2009). *QUANTUM ESPRESSO: a modular and open-source software project.* **J. Phys.: Condens. Matter 21**, 395502. https://doi.org/10.1088/0953-8984/21/39/395502
-
----
-
-## Citation
-
-```bibtex
-@misc{gunes2026heg_response,
-  author = {Güneş, M.},
-  title  = {Static density-density response of the 3D HEG via DMC},
-  year   = {2026},
-  url    = {https://github.com/moegunes/static_response-3DHEG},
-}
-```
-
----
-
-## License
-
-MIT — see [LICENSE](LICENSE).
