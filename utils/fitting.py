@@ -94,6 +94,16 @@ def fit_quality_report(
 
         reliable = (snr > 5.0) and (A_sig > 2.0) and (chi2_red < 10.0)
 
+        if not reliable:
+            if snr <= 5.0:
+                reason = f"Low signal-to-noise ratio. SNR = {snr:.2f}"
+            elif A_sig <= 2.0:
+                reason = f"Low significance. |A|/dA = {A_sig:.2f}"
+            elif chi2_red >= 10.0:
+                reason = f"High reduced chi^2. chi^2 = {chi2_red:.2f}"
+        else:
+            reason = "None"
+
         info = {
             "reduced_chi2": chi2_red,
             "signal_to_noise": snr,
@@ -104,15 +114,19 @@ def fit_quality_report(
             "popt": popt,
             "pcov": pcov,
             "q": q,
+            "vqlist": vq_arr,
+            "vq_fit": vq_fit,
+            "reason": reason,
         }
         fit_quality.append(info)
 
         if verbose:
             tag = "OK" if reliable else "UNRELIABLE"
-            print(
-                f"  q={q}  chi/n0={A:.4e}  SNR={snr:.1f}  "
-                f"|A|/dA={A_sig:.1f}  chi2r={chi2_red:.2f}  [{tag}]"
-            )
+            if not reliable:
+                print(
+                    f"  q={q}  chi/n0={A:.4e}  SNR={snr:.1f}  "
+                    f"|A|/dA={A_sig:.1f}  chi2r={chi2_red:.2f}  [{tag}]"
+                )
 
     return fit_quality
 
@@ -195,7 +209,10 @@ def get_chi_q(main_dir, Ne, rs, vq_list, qidx_list, verbose=False, vq_fit="quadr
 
     poptl, pcovl = [], []
     func = _fit_func(vq_fit)
-
+    if verbose:
+        print(
+            f"Fitting E(vq) for {len(qidx_list)} q-points with '{vq_fit}' function..."
+        )
     for iq in range(len(qidx_list)):
         popt, pcov = fit_E_of_vq(E_all[iq], dE_all[iq], vq_arr, func)
         A = popt[0]
@@ -204,10 +221,15 @@ def get_chi_q(main_dir, Ne, rs, vq_list, qidx_list, verbose=False, vq_fit="quadr
         pcovl.append(pcov)
         chi_q[iq] = A * n0
         dchi_q[iq] = dA * n0
-
+    if verbose:
+        print("Fit complete. Generating fit quality report...")
     fit_quality = fit_quality_report(
         poptl, pcovl, E_all, dE_all, vq_arr, qidx_list, vq_fit, verbose
     )
+    if verbose:
+        print("-" * 82)
+        print("Successfully completed")
+        print("-" * 82)
     return chi_q, dchi_q, fit_quality
 
 
@@ -239,7 +261,7 @@ def get_correction(main_dir, qidxl, rs, Ne, vq_list, qidx_list):
     chi00_q = get_chi0_q(main_dir, Ne, rs, vq_list, qidxl, dft_func="ni", ecut_pre=125)[
         0
     ]
-    return chi0_infty ** (-1) - chi0_a ** (-1)
+    return chi0_infty ** (-1) - chi00_q ** (-1)
 
 
 def get_chi(

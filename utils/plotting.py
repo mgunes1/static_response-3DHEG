@@ -98,6 +98,15 @@ def plot_chi(
             }
         )
         ax.plot(ql[~reliable] / kF, -chi[~reliable] / n0, **bad_defaults)
+        # printing the unreliable q points and their indices
+        print("\nUnreliable q points:")
+        print("-" * 41)
+        for i, q in enumerate(np.array(qidxl)[~reliable]):
+            iq_unreliable = np.array(range(len(qidxl)))[~reliable][i]
+            print(
+                f"q = {q}.\nFitted with {fit_quality[iq_unreliable]['vq_fit']} function by following vq points: {fit_quality[iq_unreliable]['vqlist']}.\nReason: {fit_quality[iq_unreliable]['reason']}"
+            )
+            print("-" * 41)
 
     ax.set_ylabel(r"$-\chi(q)/n_0$")
     ax.set_xlabel(r"$q/q_F$")
@@ -111,7 +120,6 @@ def plot_E_of_vq(
     rs,
     Ne,
     main_dir,
-    dft_func,
     alpha=None,
     ax=None,
     fit_line="r",
@@ -133,7 +141,7 @@ def plot_E_of_vq(
     """
     from scipy.optimize import curve_fit
 
-    from .io_utils import get_energy, get_energy_pwscf, qmc_params_default
+    from .io_utils import _build_h5_path, get_energy, get_energy_pwscf
     from .physics import (
         anal_chi02,
         get_chi_Moroni,
@@ -152,26 +160,14 @@ def plot_E_of_vq(
 
     # Collect energies
     E_list, dE_list = [], []
-    ecut, wf, dft_f, ts, ss, nw, tpmult = qmc_params_default(rs, Ne)
-    thr = 10
     for vq in vq_list:
         if pwscf:
-            path = (
-                f"{main_dir}/rs{rs:.1f}-n{Ne:d}/"
-                f"qv{q[0]:d}_{q[1]:d}_{q[2]:d}-vq{vq:.4f}/"
-                f"{dft_func}-e{ecut_pre}-qa{alpha:.3f}-thr1.0d-{thr}/"
-                f"scf/qeout"
-            )
+            path = _build_h5_path(main_dir, rs, Ne, q, vq, pwscf=True)
             E = get_energy_pwscf(path)
             dE = 1e-17
         else:
-            path = (
-                f"{main_dir}/rs{rs:.1f}-n{Ne:d}/"
-                f"qv{q[0]:d}_{q[1]:d}_{q[2]:d}-vq{vq:.4f}/"
-                f"{dft_func}-e{ecut_pre}-qa{alpha:.3f}-thr1.0d-{thr}/"
-                f"{wf}-t{tpmult * Ne * rs}-ts{ts:.4f}-nw{nw}/"
-                f"qmc.s00{ss}.stat.h5"
-            )
+            path = _build_h5_path(main_dir, rs, Ne, q, vq, pwscf=False)
+
             E, dE = get_energy(path)
         E_list.append(E / Ne)
         dE_list.append(dE / Ne)
@@ -248,9 +244,6 @@ def plot_variance(
     Ne,
     qidx_list=None,
     vq_list=None,
-    ecut_pre=125,
-    dft_func="ni",
-    wf="sj",
     nequil=50,
     vs="vq",
     fixed_val=None,
@@ -283,9 +276,7 @@ def plot_variance(
             raise ValueError("Need fixed q-index for vs='vq'")
         q = fixed_val
         for vq in vq_list:
-            var, dvar = get_variance_for_run(
-                main_dir, rs, Ne, q, vq, ecut_pre, dft_func, wf, nequil
-            )
+            var, dvar = get_variance_for_run(main_dir, rs, Ne, q, vq, nequil=nequil)
             if var is not None:
                 x_vals.append(vq)
                 var_vals.append(var)
@@ -304,9 +295,7 @@ def plot_variance(
         vq = fixed_val
         q_mags = get_qs(qidx_list, Ne, rs)
         for i, q in enumerate(qidx_list):
-            var, dvar = get_variance_for_run(
-                main_dir, rs, Ne, q, vq, ecut_pre, dft_func, wf, nequil
-            )
+            var, dvar = get_variance_for_run(main_dir, rs, Ne, q, vq, nequil=nequil)
             if var is not None:
                 x_vals.append(q_mags[i] / kF)
                 var_vals.append(var)

@@ -200,19 +200,28 @@ def qmc_params_default(rs, Ne):
     return ecut_pre, wf, dft_func, ts, ss, nw, tpmult
 
 
-def _build_h5_path(main_dir, rs, Ne, q, vq):
+def _build_h5_path(main_dir, rs, Ne, q, vq, pwscf=False):
     """Construct the path to a stat.h5 file for given run parameters."""
     from .physics import guess_alpha2
 
     alpha = guess_alpha2(rs, Ne, q)
     ecut_pre, wf, dft_func, ts, ss, nw, tpmult = qmc_params_default(rs, Ne)
-    return (
-        f"{main_dir}/rs{rs:.1f}-n{Ne:d}/"
-        f"qv{q[0]:d}_{q[1]:d}_{q[2]:d}-vq{vq:.4f}/"
-        f"{dft_func}-e{ecut_pre}-qa{alpha:.3f}-thr1.0d-10/"
-        f"{wf}-t{tpmult * Ne * rs}-ts{ts:.4f}-nw{nw}/"
-        f"qmc.s00{ss}.stat.h5"
-    )
+    if pwscf:
+        thr = 10
+        return (
+            f"{main_dir}/rs{rs:.1f}-n{Ne:d}/"
+            f"qv{q[0]:d}_{q[1]:d}_{q[2]:d}-vq{vq:.4f}/"
+            f"{dft_func}-e{ecut_pre}-qa{alpha:.3f}-thr1.0d-{thr}/"
+            f"scf/qeout"
+        )
+    else:
+        return (
+            f"{main_dir}/rs{rs:.1f}-n{Ne:d}/"
+            f"qv{q[0]:d}_{q[1]:d}_{q[2]:d}-vq{vq:.4f}/"
+            f"{dft_func}-e{ecut_pre}-qa{alpha:.3f}-thr1.0d-10/"
+            f"{wf}-t{tpmult * Ne * rs}-ts{ts:.4f}-nw{nw}/"
+            f"qmc.s00{ss}.stat.h5"
+        )
 
 
 def get_variance_for_run(main_dir, rs, Ne, q, vq, nequil=50):
