@@ -1,36 +1,36 @@
 # Static response of the 3D HEG using diffusion Monte Carlo
 
-Analysis code for computing the **static density-density response function** χ(q) of the three-dimensional **homogeneous electron gas (3D HEG)** via **Diffusion Monte Carlo (DMC)** ([QMCPACK](https://qmcpack.org)). Trial wavefunctions produced by DFT from [Quantum ESPRESSO](https://www.quantum-espresso.org).
+Analysis code for computing the **static density-density response function** $\chi(q)$ of the three-dimensional **homogeneous electron gas (3D HEG)** via **Diffusion Monte Carlo (DMC)** ([QMCPACK](https://qmcpack.org)). Trial wavefunctions produced by DFT from [Quantum ESPRESSO](https://www.quantum-espresso.org).
 
 ---
 
 ## Method
 
-### Extracting χ(q) from total energies
+### Extracting $\chi(q)$ from total energies
 
 A static cosine perturbation is added to the Hamiltonian:
 
-```
-H(v_q) = H_0 + 2 v_q Σ_i cos(q·r_i)
-```
+$$
+H(v_q) = H_0 + 2 v_q \sum_i \cos(\mathbf{q} \cdot \mathbf{r}_i)
+$$
 
-For small amplitude v_q, the DMC ground-state energy per electron expands as:
+For small amplitude $v_q$, the DMC ground-state energy per electron expands as:
 
-```
-E(v_q) / N_e = E_0 / N_e + [χ(q)/n_0] v_q² + O(v_q⁴)
-```
+$$
+\frac{E(v_q)}{N_e} = \frac{E_0}{N_e} + \frac{\chi(q)}{n_0} v_q^2 + O(v_q^4)
+$$
 
-so χ(q)/n₀ is the quadratic coefficient of a polynomial fit to E(v_q). DMC energies are computed by QMCPACK using a Slater-Jastrow trial wavefunction perturbed at each wavevector **q**.
+so $\chi(q)/n_0$ is the quadratic coefficient of a polynomial fit to $E(v_q)$. DMC energies are computed by QMCPACK using a Slater-Jastrow trial wavefunction perturbed at each wavevector $\mathbf{q}$.
 
 ### Finite-size correction
 
-DMC energies are computed in a finite simulation cell of N_e electrons. The finite-size error in χ is corrected using the known analytic form of the non-interacting finite-size bias:
+DMC energies are computed in a finite simulation cell of $N_e$ electrons. The finite-size error in $\chi$ is corrected using the known analytic form of the non-interacting finite-size bias:
 
-```
-χ⁻¹(q; ∞) = χ⁻¹(q; N_e) + [χ₀⁻¹(q; ∞) − χ₀⁻¹(q; N_e)]
-```
+$$
+\chi^{-1}(q; \infty) = \chi^{-1}(q; N_e) + \left[\chi_0^{-1}(q; \infty) - \chi_0^{-1}(q; N_e)\right]
+$$
 
-where χ₀ is the non-interacting Lindhard function.
+where $\chi_0$ is the non-interacting Lindhard function.
 
 ---
 
