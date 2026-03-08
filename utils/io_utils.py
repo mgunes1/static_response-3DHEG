@@ -200,10 +200,12 @@ def qmc_params_default(rs, Ne):
     return ecut_pre, wf, dft_func, ts, ss, nw, tpmult
 
 
-def _build_h5_path(
-    main_dir, rs, Ne, q, vq, alpha, ecut_pre, wf, dft_func, ts, ss, nw, tpmult
-):
+def _build_h5_path(main_dir, rs, Ne, q, vq):
     """Construct the path to a stat.h5 file for given run parameters."""
+    from .physics import guess_alpha2
+
+    alpha = guess_alpha2(rs, Ne, q)
+    ecut_pre, wf, dft_func, ts, ss, nw, tpmult = qmc_params_default(rs, Ne)
     return (
         f"{main_dir}/rs{rs:.1f}-n{Ne:d}/"
         f"qv{q[0]:d}_{q[1]:d}_{q[2]:d}-vq{vq:.4f}/"
@@ -213,9 +215,7 @@ def _build_h5_path(
     )
 
 
-def get_variance_for_run(
-    main_dir, rs, Ne, q, vq, ecut_pre=125, dft_func="ni", wf="sj", nequil=50
-):
+def get_variance_for_run(main_dir, rs, Ne, q, vq, nequil=50):
     """
     Get variance for a specific QMC run.
 
@@ -223,21 +223,7 @@ def get_variance_for_run(
     -------
     (var, dvar) or (None, None) if the file is missing.
     """
-    from .physics import guess_alpha2
-
-    alpha = guess_alpha2(rs, Ne, q)
-    ts = rs / (12 * Ne**0.5) if wf == "sjb" else rs / 20
-    ss = 3 if wf == "sjb" else 2
-    nw = 1024
-    tpmult = 15.625
-
-    scalar_path = (
-        f"{main_dir}/rs{rs:.1f}-n{Ne:d}/"
-        f"qv{q[0]:d}_{q[1]:d}_{q[2]:d}-vq{vq:.4f}/"
-        f"{dft_func}-e{ecut_pre}-qa{alpha:.3f}-thr1.0d-10/"
-        f"{wf}-t{tpmult * Ne * rs}-ts{ts:.4f}-nw{nw}/qmc.s00{ss}.scalar.dat"
-    )
-
+    scalar_path = _build_h5_path(main_dir, rs, Ne, q, vq)
     try:
         return get_variance(scalar_path, nequil)
     except (FileNotFoundError, OSError):
@@ -297,39 +283,23 @@ def get_E_all(main_dir, rs, Ne):
     qidx_list : list of [qx, qy, qz]
     vq_list : sorted list of float
     """
-    from .physics import guess_alpha2
 
     qidx_list, vq_list = collect_q_and_vq(main_dir, rs, Ne)
     n_q, n_v = len(qidx_list), len(vq_list)
-    E_all = np.full((n_q, n_v), np.nan)
-    dE_all = np.full((n_q, n_v), np.nan)
-
-    ecut_pre, wf, dft_func, ts, ss, nw, tpmult = qmc_params_default(rs, Ne)
+    E_all = np.zeros((n_q, n_v))  # np.full((n_q, n_v), np.nan)
+    dE_all = np.zeros((n_q, n_v))  # np.full((n_q, n_v), np.nan)
 
     for iq, q in enumerate(qidx_list):
-        alpha = guess_alpha2(rs, Ne, q)
         for iv, vq in enumerate(vq_list):
-            h5path = _build_h5_path(
-                main_dir,
-                rs,
-                Ne,
-                q,
-                vq,
-                alpha,
-                ecut_pre,
-                wf,
-                dft_func,
-                ts,
-                ss,
-                nw,
-                tpmult,
-            )
+            h5path = _build_h5_path(main_dir, rs, Ne, q, vq)
             try:
                 E, dE = get_energy(h5path)
                 E_all[iq, iv] = E / Ne
                 dE_all[iq, iv] = dE / Ne
-            except (FileNotFoundError, OSError):
-                print(f"  [get_E_all] skipping missing: {h5path}")
+            except (FileNotFoundError, OSError) as e:
+                raise FileNotFoundError(
+                    f"Required file not found (check for still running DMC simulations or errors): {h5path}"
+                ) from e
 
     os.makedirs("./output", exist_ok=True)
     np.savez(
@@ -411,82 +381,3 @@ def load_or_compute_E(main_dir, rs, Ne, qidx_list, vq_list):
             f"Available q: {full_qlist}, available vq: {list(data['vqlist'])}"
         )
     return result
-
-
-def load_raw_blocks(
-    main_dir,
-    Ne,
-    rs,
-    vq_list,
-    qidx_list,
-    ecut_pre=125,
-    dft_func="ni",
-    wf="sj",
-    nequil=50,
-):
-    """
-    Load raw QMC block energies for all (q, vq) combinations.
-
-    Returns
-    -------
-    raw_blocks : ndarray (n_q, n_v, n_blocks)
-        Per-block energies E/Ne after equilibration.
-    """
-    import h5py
-
-    from .physics import guess_alpha2
-
-    ts = rs / (12 * Ne**0.5) if wf == "sjb" else rs / 20
-    ss = 3 if wf == "sjb" else 2
-    nw = 1024
-    tpmult = 15.625
-
-    n_q, n_v = len(qidx_list), len(vq_list)
-
-    # Read first file to determine n_blocks
-    q0 = qidx_list[0]
-    alpha0 = guess_alpha2(rs, Ne, q0)
-    path0 = _build_h5_path(
-        main_dir,
-        rs,
-        Ne,
-        q0,
-        vq_list[0],
-        alpha0,
-        ecut_pre,
-        wf,
-        dft_func,
-        ts,
-        ss,
-        nw,
-        tpmult,
-    )
-    with h5py.File(path0, "r") as f:
-        total_blocks = f["LocalEnergy/value"].shape[0]
-    n_blocks = total_blocks - nequil
-
-    raw_blocks = np.empty((n_q, n_v, n_blocks), dtype=np.float64)
-
-    for iq, q in enumerate(qidx_list):
-        alpha = guess_alpha2(rs, Ne, q)
-        for iv, vq in enumerate(vq_list):
-            h5path = _build_h5_path(
-                main_dir,
-                rs,
-                Ne,
-                q,
-                vq,
-                alpha,
-                ecut_pre,
-                wf,
-                dft_func,
-                ts,
-                ss,
-                nw,
-                tpmult,
-            )
-            with h5py.File(h5path, "r") as f:
-                vals = f["LocalEnergy/value"][nequil:, 0]
-            raw_blocks[iq, iv, : len(vals)] = vals / Ne
-
-    return raw_blocks

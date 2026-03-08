@@ -231,14 +231,15 @@ def get_correction(main_dir, qidxl, rs, Ne, vq_list, qidx_list):
     vq_list, qidx_list : list
         Full vq / q lists for DFT chi0 fit.
     """
-    from .physics import chi0q, get_qs
+    from .physics import anal_chi02, chi0q, get_qs
 
     ql = get_qs(qidxl, Ne, rs)
     chi0_infty = chi0q(ql, Ne, rs)
+    chi0_a = anal_chi02(rs, Ne, qidxl)
     chi00_q = get_chi0_q(main_dir, Ne, rs, vq_list, qidxl, dft_func="ni", ecut_pre=125)[
         0
     ]
-    return chi0_infty ** (-1) - chi00_q ** (-1)
+    return chi0_infty ** (-1) - chi0_a ** (-1)
 
 
 def get_chi(
@@ -366,17 +367,23 @@ def bootstrap_chi_error(
     for b in range(n_boot):
         for iq in range(n_q):
             popt, _ = fit_E_of_vq(E_pert[b, iq], dE_all[iq], vq_arr, func)
+            chi_boot[b, iq] = popt[0] * n0
+            """
             try:
                 chi_boot[b, iq] = popt[0] * n0
             except (RuntimeError, IndexError):
                 chi_boot[b, iq] = np.nan
+            """
 
     boot_samples = np.empty_like(chi_boot)
     for b in range(n_boot):
+        boot_samples[b] = fs_correct_fn(chi_boot[b])
+        """
         try:
             boot_samples[b] = fs_correct_fn(chi_boot[b])
         except Exception:
             boot_samples[b] = np.nan
+        """
 
     boot_err = np.nanstd(boot_samples, axis=0)
     return boot_err, boot_samples
