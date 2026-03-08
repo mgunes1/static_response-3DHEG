@@ -11,7 +11,7 @@ Analysis code for computing the **static density-density response function** $\c
 A static cosine perturbation is added to the Hamiltonian:
 
 $$
-H(v_q) = H_0 + 2 v_q \sum_i \cos(\mathbf{q} \cdot \mathbf{r}_i)
+H(v_q) = H_0 + 2 v_q  \cos(\mathbf{q} \cdot \mathbf{r})
 $$
 
 For small amplitude $v_q$, the DMC ground-state energy per electron expands as:
