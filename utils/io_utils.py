@@ -262,9 +262,12 @@ def get_variance_for_run(main_dir, rs, Ne, q, vq, nequil=50):
 # ---------------------------------------------------------------------------
 
 
-def _cache_path(rs, Ne):
+def _cache_path(rs, Ne, pwscf=False):
     """Return the file path for the cached E_all."""
-    return f"./output/E_all_rs{rs:.1f}-n{Ne:d}.npz"
+    if pwscf:
+        return f"./output/E_DFT_rs{rs:.1f}-n{Ne:d}.npz"
+    else:
+        return f"./output/E_QMC_rs{rs:.1f}-n{Ne:d}.npz"
 
 
 def _subset_E(E_full, dE_full, full_qlist, full_vqlist, req_qlist, req_vqlist):
@@ -315,14 +318,21 @@ def get_E_all(main_dir, rs, Ne):
     n_q, n_v = len(qidx_list), len(vq_list)
     E_all = np.zeros((n_q, n_v))  # np.full((n_q, n_v), np.nan)
     dE_all = np.zeros((n_q, n_v))  # np.full((n_q, n_v), np.nan)
+    E_dft_all = np.zeros((n_q, n_v))  # np.full((n_q, n_v), np.nan)
+    dE_dft_all = np.zeros((n_q, n_v))  # np.full((n_q, n_v), np.nan)
 
     for iq, q in enumerate(qidx_list):
         for iv, vq in enumerate(vq_list):
             h5path = _build_h5_path(main_dir, rs, Ne, q, vq)
+            h5path_dft = _build_h5_path(main_dir, rs, Ne, q, vq, pwscf=True)
             try:
                 E, dE = get_energy(h5path)
                 E_all[iq, iv] = E / Ne
                 dE_all[iq, iv] = dE / Ne
+
+                E_dft, dE_dft = get_energy_pwscf(h5path_dft), 0.0
+                E_dft_all[iq, iv] = E_dft / Ne
+                dE_dft_all[iq, iv] = dE_dft / Ne
             except (FileNotFoundError, OSError) as e:
                 raise FileNotFoundError(
                     f"Required file not found (check for still running DMC simulations or errors): {h5path}"
@@ -333,6 +343,14 @@ def get_E_all(main_dir, rs, Ne):
         _cache_path(rs, Ne),
         E_all=E_all,
         dE_all=dE_all,
+        qlist=qidx_list,
+        vqlist=vq_list,
+        main_dir=main_dir,
+    )
+    np.savez(
+        _cache_path(rs, Ne, pwscf=True),
+        E_all=E_dft_all,
+        dE_all=dE_dft_all,
         qlist=qidx_list,
         vqlist=vq_list,
         main_dir=main_dir,
