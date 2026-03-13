@@ -155,7 +155,7 @@ def get_chi0_q(
     chi_q : array   — DFT chi_0 for each q
     dchi_q : array  — (zeros — DFT has no stochastic error)
     """
-    from .io_utils import get_energy_pwscf
+    from .io_utils import _build_h5_path, get_energy_pwscf
     from .physics import get_gas_params, guess_alpha2
 
     chi_q = np.zeros(len(qidx_list))
@@ -165,12 +165,7 @@ def get_chi0_q(
         E_list = []
         alpha = guess_alpha2(rs, Ne, q)
         for vq in vq_list:
-            path = (
-                f"{main_dir}/rs{rs:.1f}-n{Ne:d}/"
-                f"qv{q[0]:d}_{q[1]:d}_{q[2]:d}-vq{vq:.4f}/"
-                f"{dft_func}-e{ecut_pre}-qa{alpha:.3f}-thr1.0d-10/"
-                f"scf/qeout"
-            )
+            path = _build_h5_path(main_dir, rs, Ne, q, vq, pwscf=True)
             E = get_energy_pwscf(path)
             E_list.append(E / Ne)
 
