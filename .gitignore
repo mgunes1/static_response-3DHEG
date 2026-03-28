@@ -1,5 +1,5 @@
 # Local postprocessing notebooks
-low-q.ipynb
+*.ipynb
 
 # Virtual environments
 .venv/

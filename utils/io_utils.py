@@ -158,29 +158,41 @@ def collect_q_and_vq(runs_path, rs, n):
     vq_list : list of float
         Sorted unique vq values.
     """
-    rsn_dir = os.path.join(runs_path, f"rs{rs:.1f}-n{n}")
-    if not os.path.isdir(rsn_dir):
-        raise FileNotFoundError(f"Directory not found: {rsn_dir}")
+    try:
+        data = np.load(
+            runs_path + "/output/E_all_rs{:.1f}-n{:d}.npz".format(rs, n),
+            allow_pickle=True,
+        )
+        qidx_list = [list(q) for q in data["qlist"]]
+        vq_list = list(data["vqlist"])
+        print(f"  [cache hit] loaded q/vq from {runs_path}")
+        return qidx_list, vq_list
 
-    q_pattern = re.compile(r"qv(-?\d+)_(-?\d+)_(-?\d+)-vq([\d.]+)$")
+    except (FileNotFoundError, KeyError):
+        print(f"  [cache miss] no q/vq cache at {runs_path} — parsing directory tree")
+        rsn_dir = os.path.join(runs_path, f"rs{rs:.1f}-n{n}")
+        if not os.path.isdir(rsn_dir):
+            raise FileNotFoundError(f"Directory not found: {rsn_dir}")
 
-    qidx_set = set()
-    vq_set = set()
+        q_pattern = re.compile(r"qv(-?\d+)_(-?\d+)_(-?\d+)-vq([\d.]+)$")
 
-    with os.scandir(rsn_dir) as entries:
-        for entry in entries:
-            if not entry.is_dir():
-                continue
-            match = q_pattern.match(entry.name)
-            if match:
-                qidx_set.add(
-                    (int(match.group(1)), int(match.group(2)), int(match.group(3)))
-                )
-                vq_set.add(float(match.group(4)))
+        qidx_set = set()
+        vq_set = set()
 
-    qidx_list = [list(q) for q in sorted(qidx_set)]
-    vq_list = sorted(vq_set)
-    return qidx_list, vq_list
+        with os.scandir(rsn_dir) as entries:
+            for entry in entries:
+                if not entry.is_dir():
+                    continue
+                match = q_pattern.match(entry.name)
+                if match:
+                    qidx_set.add(
+                        (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+                    )
+                    vq_set.add(float(match.group(4)))
+
+        qidx_list = [list(q) for q in sorted(qidx_set)]
+        vq_list = sorted(vq_set)
+        return qidx_list, vq_list
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +411,16 @@ def load_or_compute_E(main_dir, rs, Ne, qidx_list, vq_list):
                 f"  [cache stale] main_dir changed "
                 f"({stored_dir} → {main_dir}) — rebuilding"
             )
+            full_qlist = [list(q) for q in data["qlist"]]
+            result = _subset_E(
+                data["E_all"],
+                data["dE_all"],
+                full_qlist,
+                data["vqlist"],
+                qidx_list,
+                vq_list,
+            )
+            return result
 
     # Rebuild cache with ALL available data
     warnings.warn(
