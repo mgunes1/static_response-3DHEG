@@ -256,7 +256,7 @@ def get_correction(main_dir, qidxl, rs, Ne, vq_list, qidx_list):
     chi00_q = get_chi0_q(main_dir, Ne, rs, vq_list, qidxl, dft_func="ni", ecut_pre=125)[
         0
     ]
-    return chi0_infty ** (-1) - chi00_q ** (-1)
+    return chi0_infty ** (-1) - chi0_a ** (-1)
 
 
 def get_chi(
