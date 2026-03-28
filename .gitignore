@@ -1,5 +1,6 @@
 # Local postprocessing notebooks
 low-q.ipynb
+fitting_G.ipynb
 
 # Virtual environments
 .venv/

@@ -124,7 +124,6 @@ def plot_E_of_vq(
     ax=None,
     fit_line="r",
     pwscf=False,
-    ecut_pre=125,
     **kwargs,
 ):
     """
@@ -141,7 +140,8 @@ def plot_E_of_vq(
     """
     from scipy.optimize import curve_fit
 
-    from .io_utils import _build_h5_path, get_energy, get_energy_pwscf
+    from utils.io_utils import load_or_compute_E
+
     from .physics import (
         anal_chi02,
         get_chi_Moroni,
@@ -159,25 +159,21 @@ def plot_E_of_vq(
     n0 = get_gas_params(rs, Ne)[1]
 
     # Collect energies
-    E_list, dE_list = [], []
-    for vq in vq_list:
-        if pwscf:
-            path = _build_h5_path(main_dir, rs, Ne, q, vq, pwscf=True)
-            E = get_energy_pwscf(path)
-            dE = 1e-17
-        else:
-            path = _build_h5_path(main_dir, rs, Ne, q, vq, pwscf=False)
+    if pwscf:
+        E_list, dE_list = load_or_compute_E(main_dir, rs, Ne, [q], vq_list, pwscf=True)
+    else:
+        E_list, dE_list = load_or_compute_E(main_dir, rs, Ne, [q], vq_list)
+        # print(np.shape(E_list), np.shape(dE_list))
 
-            E, dE = get_energy(path)
-        E_list.append(E / Ne)
-        dE_list.append(dE / Ne)
-
-    E_arr = np.array(E_list)
-    dE_arr = np.array(dE_list)
+    E_arr = np.array(*E_list)
+    dE_arr = np.array(*dE_list)
     vq_arr = np.array(vq_list)
 
     def quartic(x, A, B):
         return E_arr[0] + A * x**2 + B * x**4
+
+    def quadratic(x, A):
+        return E_arr[0] + A * x**2
 
     if pwscf:
         popt, _ = curve_fit(
@@ -217,7 +213,6 @@ def plot_E_of_vq(
             E_arr[0] + get_chi_Moroni(rs, Ne, get_qs([q], Ne, rs)) / n0 * finex**2,
             "k",
         )
-        print(f"-chi/n0 = {-popt[0]:.3f}")
         ax.errorbar(vq_arr, E_arr, yerr=dE_arr, linestyle="", alpha=0.7, color="black")
         marker_defaults = {
             "markerfacecolor": "white",
@@ -233,8 +228,7 @@ def plot_E_of_vq(
 
     kF = get_gas_params(rs, Ne)[0]
     ax.set_title(
-        rf"$N_e = {Ne}, r_s = {rs}, q/kF = {get_qs([q], Ne, rs) / kF}, "
-        rf"\alpha= {alpha:.3f}$"
+        rf"$N_e = {Ne}, r_s = {rs}, q/kF = {get_qs([q], Ne, rs)[0] / kF:.2f}, \alpha= {alpha:.3f}$"
     )
 
 

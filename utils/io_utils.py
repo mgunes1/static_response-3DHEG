@@ -160,7 +160,7 @@ def collect_q_and_vq(runs_path, rs, n):
     """
     try:
         data = np.load(
-            runs_path + "/output/E_all_rs{:.1f}-n{:d}.npz".format(rs, n),
+            runs_path + "/output/E_QMC_rs{:.1f}-n{:d}.npz".format(rs, n),
             allow_pickle=True,
         )
         qidx_list = [list(q) for q in data["qlist"]]
@@ -371,7 +371,7 @@ def get_E_all(main_dir, rs, Ne):
     return E_all, dE_all, qidx_list, vq_list
 
 
-def load_or_compute_E(main_dir, rs, Ne, qidx_list, vq_list):
+def load_or_compute_E(main_dir, rs, Ne, qidx_list, vq_list, pwscf=False):
     """
     Return E_all and dE_all for the requested (qidx_list, vq_list) subset.
 
@@ -382,8 +382,7 @@ def load_or_compute_E(main_dir, rs, Ne, qidx_list, vq_list):
     E_sub : ndarray (n_q_req, n_v_req)
     dE_sub : ndarray (n_q_req, n_v_req)
     """
-    cache = _cache_path(rs, Ne)
-
+    cache = _cache_path(rs, Ne, pwscf=pwscf)
     if os.path.exists(cache):
         data = np.load(cache, allow_pickle=True)
         stored_dir = str(data["main_dir"])

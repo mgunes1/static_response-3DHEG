@@ -257,6 +257,26 @@ def fxc_lda_scalar(rs):
 # ---------------------------------------------------------------------------
 
 
+def get_fxc_from_chi(rs, Ne, qidx_list, chi):
+    """Extract f_xc(q) from chi(q) via the relation chi = chi0 / (1 - chi0 * (Vc + fxc))."""
+    ql = get_qs(qidx_list, Ne, rs)
+    Vc = 4 * np.pi / ql**2
+    chi0 = anal_chi02(rs, Ne, qidx_list)
+    fxc = 1 / chi0 - 1 / chi - Vc
+    return fxc
+
+
+# chi_RPA = chi0 / (1 - chi0 *Vc)
+# 1/chi_RPA = 1/chi0 - Vc
+def get_G_from_chi(rs, Ne, qidx_list, chi):
+    """Extract G(q) from chi(q) via the relation chi = chi0 / (1 - chi0 * (Vc + fxc))."""
+    ql = get_qs(qidx_list, Ne, rs)
+    Vc = 4 * np.pi / ql**2
+    fxc = get_fxc_from_chi(rs, Ne, qidx_list, chi)
+    G = -fxc / Vc  # 1 + (1 / chi - 1 / chi0)/Vc
+    return G
+
+
 def G_Moroni(rs, q):
     """Moroni et al. local field factor G(q)."""
     q = q + 1e-18

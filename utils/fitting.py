@@ -8,6 +8,9 @@ finite-size corrected pipeline (get_chi), and vq-range analysis.
 import numpy as np
 from scipy.optimize import curve_fit
 
+from utils.io_utils import load_or_compute_E
+from utils.physics import anal_chi02, get_gas_params, get_qs
+
 # ---------------------------------------------------------------------------
 # Fit functions
 # ---------------------------------------------------------------------------
@@ -36,7 +39,7 @@ def _fit_func(vq_fit):
         )
 
 
-def fit_E_of_vq(E_arr, dE_arr, vq_arr, func):
+def fit_E_of_vq(E_arr, dE_arr, vq_arr, func, pwscf=False, alpha=None):
     """
     Fit E(vq) with the given function using curve_fit.
 
@@ -51,7 +54,11 @@ def fit_E_of_vq(E_arr, dE_arr, vq_arr, func):
     -------
     popt, pcov : as from scipy.optimize.curve_fit
     """
-    return curve_fit(func, vq_arr, E_arr, sigma=dE_arr, absolute_sigma=True)
+    if pwscf and alpha is not None:
+        vq_arr = np.array(vq_arr) * alpha
+        return curve_fit(func, vq_arr, E_arr)
+    else:
+        return curve_fit(func, vq_arr, E_arr, sigma=dE_arr, absolute_sigma=True)
 
 
 # ---------------------------------------------------------------------------
@@ -142,8 +149,6 @@ def get_chi0_q(
     rs,
     vq_list,
     qidx_list,
-    ecut_pre=125,
-    dft_func="ni",
     vq_fit="quadratic",
 ):
     """
@@ -155,24 +160,30 @@ def get_chi0_q(
     chi_q : array   — DFT chi_0 for each q
     dchi_q : array  — (zeros — DFT has no stochastic error)
     """
-    from .io_utils import _build_h5_path, get_energy_pwscf
-    from .physics import get_gas_params, guess_alpha2
+    from .io_utils import load_or_compute_E
+    from .physics import guess_alpha2
+
+    n0 = get_gas_params(rs, Ne)[1]
+    E_all, dE_all = load_or_compute_E(main_dir, rs, Ne, qidx_list, vq_list, pwscf=True)
 
     chi_q = np.zeros(len(qidx_list))
     dchi_q = np.zeros(len(qidx_list))
+    vq_arr = np.asarray(vq_list, dtype=float)
 
-    for iq, q in enumerate(qidx_list):
-        E_list = []
-        alpha = guess_alpha2(rs, Ne, q)
-        for vq in vq_list:
-            path = _build_h5_path(main_dir, rs, Ne, q, vq, pwscf=True)
-            E = get_energy_pwscf(path)
-            E_list.append(E / Ne)
+    poptl, pcovl = [], []
+    func = _fit_func(vq_fit)
 
-        func = _fit_func(vq_fit)
-        popt, _ = curve_fit(func, np.array(vq_list) * alpha, E_list)
-        n0 = get_gas_params(rs, Ne)[1]
-        chi_q[iq] = popt[0] * n0
+    for iq in range(len(qidx_list)):
+        alpha = guess_alpha2(rs, Ne, qidx_list[iq])
+        popt, pcov = fit_E_of_vq(
+            E_all[iq], dE_all[iq], vq_arr, func, pwscf=True, alpha=alpha
+        )
+        A = popt[0]
+        dA = np.sqrt(pcov[0, 0]) if pcov[0, 0] > 0 else 1e8
+        poptl.append(popt)
+        pcovl.append(pcov)
+        chi_q[iq] = A * n0
+        dchi_q[iq] = dA * n0
 
     return chi_q, dchi_q
 
@@ -248,13 +259,14 @@ def get_correction(main_dir, qidxl, rs, Ne, vq_list, qidx_list):
     vq_list, qidx_list : list
         Full vq / q lists for DFT chi0 fit.
     """
-    from .physics import anal_chi02, chi0q, get_qs
+    from .physics import chi0q, get_qs
 
     ql = get_qs(qidxl, Ne, rs)
     chi0_infty = chi0q(ql, Ne, rs)
     chi0_a = anal_chi02(rs, Ne, qidxl)
-    # chi00_q = get_chi0_q(main_dir, Ne, rs, vq_list, qidxl, dft_func="ni", ecut_pre=125)[0]
-    return chi0_infty ** (-1) - chi0_a ** (-1)
+    chi00_q = get_chi0_q(main_dir, Ne, rs, vq_list, qidxl)[0]
+
+    return chi0_infty ** (-1) - chi00_q ** (-1)
 
 
 def get_chi(
@@ -402,6 +414,51 @@ def bootstrap_chi_error(
 
     boot_err = np.nanstd(boot_samples, axis=0)
     return boot_err, boot_samples
+
+
+def bootstrap_G_error(
+    vq_arr,
+    n0,
+    rs,
+    Ne,
+    qidx_list,
+    fit_type="quadratic",
+    n_boot=500,
+    seed=None,
+):
+    """
+    Parametric bootstrap for chi(q) error bars.
+
+    Perturbs E_i → E_i + dE_i * N(0,1), refits, applies FS correction.
+
+    Returns
+    -------
+    boot_err : array (n_q,)
+    boot_samples : array (n_boot, n_q)
+    """
+    rng = np.random.default_rng(seed)
+    vq_arr = np.asarray(vq_arr, dtype=float)
+    n_v = len(vq_arr)
+    n_q = len(qidx_list)
+
+    E_all, dE_all = load_or_compute_E(".", rs, Ne, qidx_list, vq_arr)
+
+    noise = rng.standard_normal((n_boot, n_q, n_v))
+    E_pert = E_all[np.newaxis, :, :] + dE_all[np.newaxis, :, :] * noise
+
+    func = _fit_func(fit_type)
+    G_boot = np.empty((n_boot, n_q))
+    ql = get_qs(qidx_list, Ne, rs)
+    chi0 = anal_chi02(rs, Ne, qidx_list)
+    for b in range(n_boot):
+        for iq in range(n_q):
+            popt, _ = fit_E_of_vq(E_pert[b, iq], dE_all[iq], vq_arr, func)
+            chi_boot = popt[0] * n0
+            Vc = 4 * np.pi / ql[iq] ** 2
+            G_boot[b, iq] = 1 + (1 / chi_boot - 1 / chi0[iq]) / Vc
+
+    boot_err = np.nanstd(G_boot, axis=0)
+    return boot_err, G_boot
 
 
 # ---------------------------------------------------------------------------
