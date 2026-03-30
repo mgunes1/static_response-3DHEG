@@ -177,16 +177,16 @@ def plot_E_of_vq(
 
     if pwscf:
         popt, _ = curve_fit(
-            quartic, vq_arr * alpha, E_arr, sigma=dE_arr, absolute_sigma=True
+            quadratic, vq_arr * alpha, E_arr, sigma=dE_arr, absolute_sigma=True
         )
     else:
-        popt, _ = curve_fit(quartic, vq_arr, E_arr, sigma=dE_arr, absolute_sigma=True)
+        popt, _ = curve_fit(quadratic, vq_arr, E_arr, sigma=dE_arr, absolute_sigma=True)
 
     # Plot
     if pwscf:
         finex = np.linspace(vq_arr[0] * alpha, vq_arr[-1] * alpha)
         ax.plot(finex, E_arr[0] + anal_chi02(rs, Ne, [q]) / n0 * finex**2, "k")
-        ax.plot(finex, E_arr[0] + popt[0] * finex**2 + popt[1] * finex**4, fit_line)
+        ax.plot(finex, E_arr[0] + popt[0] * finex**2, fit_line)
         ax.errorbar(
             vq_arr * alpha, E_arr, yerr=dE_arr, linestyle="", alpha=0.7, color="black"
         )
@@ -207,7 +207,7 @@ def plot_E_of_vq(
         ax.set_xlabel(r"$\alpha$")
     else:
         finex = np.linspace(vq_arr[0], vq_arr[-1])
-        ax.plot(finex, E_arr[0] + popt[0] * finex**2 + popt[1] * finex**4, fit_line)
+        ax.plot(finex, E_arr[0] + popt[0] * finex**2, fit_line)
         ax.plot(
             finex,
             E_arr[0] + get_chi_Moroni(rs, Ne, get_qs([q], Ne, rs)) / n0 * finex**2,

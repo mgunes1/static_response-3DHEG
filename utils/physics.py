@@ -291,7 +291,7 @@ def G_Moroni(rs, q):
     C = np.pi / (2 * k_F) * (-diff_rse)
 
     a1, a2, b1, b2 = 2.15, 0.435, 1.57, 0.409
-    n = 4 if rs == 10 else 8
+    n = 4 if rs >= 10 else 8
     x = rs**0.5
     B = (1 + a1 * x + a2 * x**3) / (3 + b1 * x + b2 * x**3)
 
