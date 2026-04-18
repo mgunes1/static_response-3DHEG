@@ -1,0 +1,162 @@
+import numpy as np
+from qharv.cross.snake import run_cmd
+
+# Path now includes alpha as a parameter to scan
+apath = 'runs/rs{rs}-n{nelec}/qv{qx}_{qy}_{qz}-vq{vq}/{func}-e{epre}-qa{alpha}-thr1.0d-10'
+fscf_inp = '%s/scf/scf.inp' % apath
+fscf_out = fscf_inp[:-4]+'.out'
+feinspline = '%s/scf/eshdf.h5' % apath
+fopt_inp = '%s/opt-sj/opt.xml' % apath
+fopt_out = fopt_inp[:-4]+'.out'
+
+# Final output: VMC optimization results (no DMC)
+fout = fopt_out
+
+def gen_qidx(mq):
+    ql = []
+    for qx in range(mq):
+        for qy in range(qx+1):
+            for qz in range(qy+1):
+                ql.append([qx, qy, qz])
+
+    ql.sort(key=lambda q: q[0]**2 + q[1]**2 + q[2]**2)
+    return ql[1:]
+
+def guess_alpha_center(rs, nelec, qidx):
+    """Original guess - used as center for alpha scan"""
+    a=1.2
+    kf = (9*np.pi/4)**(1/3)/rs #3D gas
+    alat = (nelec*4*np.pi/3)**(1./3) * rs
+    blat = 2*np.pi/alat
+    qvec = blat*np.array(qidx)
+    qmag = np.linalg.norm(qvec)
+    alpha = 2 / (1 + np.exp(-a * (qmag/kf)**2 )) - 1
+    return alpha
+
+def generate_alpha_grid(alpha_center, n_points=7, delta=0.15):
+    """
+    Generate a grid of alpha values around the center guess.
+    alpha_center: the initial guess for optimal alpha
+    n_points: number of alpha values to try
+    delta: fractional range around center (e.g., 0.15 means ±15% or fixed range)
+    """
+    # Option 1: Fixed range around center
+    alpha_min = max(0.01, alpha_center - delta)
+    alpha_max = min(0.99, alpha_center + delta)
+    
+    # Option 2: Percentage range (uncomment if preferred)
+    # alpha_min = max(0.01, alpha_center * (1 - delta))
+    # alpha_max = min(0.99, alpha_center * (1 + delta))
+    
+    return np.linspace(alpha_min, alpha_max, n_points)
+
+# ============== PARAMETERS ==============
+nelec = 162
+funcs = ['ni']
+rsl = [20]
+vql = [0, 0.0005, 0.001, 0.002, 0.003]
+qidxl = gen_qidx(5)
+
+# Alpha optimization parameters
+n_alpha_points = 7   # Number of alpha values to scan
+alpha_delta = 0.15   # Range around center guess
+
+wf = 'sj'
+
+rsl = ['%.1f' % rs for rs in rsl]
+vql = ['%.4f' % vq for vq in vql]
+
+# ============== BUILD TARGETS ==============
+targets = []
+t1 = expand(fout, allow_missing=True,
+  wf=wf, nelec=nelec, vq=vql, func=funcs, epre=125
+)
+
+for qidx in qidxl:
+  t2 = expand(t1, allow_missing=True,
+    qx=qidx[0], qy=qidx[1], qz=qidx[2]
+  )
+  for rs in rsl:
+    rs_f = float(rs)
+    # Get center alpha and generate grid
+    alpha_center = guess_alpha_center(rs_f, nelec, qidx)
+    alpha_grid = generate_alpha_grid(alpha_center, n_alpha_points, alpha_delta)
+    
+    for alpha in alpha_grid:
+      at = '%.3f' % alpha
+      t3 = expand(t2, allow_missing=False, rs=rs_f, alpha=at)
+      targets += t3
+
+# ============== COMMANDS ==============
+nk2 = 1
+nproc = 96
+cmds = dict(
+  pw = 'unset SLURM_JOBID; source /mnt/home/pyang/soft/q-e/dev.sh; mpirun -np %d pw.x -nk %d -in' % (nk2, nk2),
+  p2q = 'unset SLURM_JOBID; source /mnt/home/pyang/soft/develop_qmcpack/dev.sh; mpirun -n 1 convertpw4qmc',
+  qmc = 'source /mnt/home/pyang/soft/develop_qmcpack/dev.sh; mpirun -np %d qmcpack' % nproc,
+)
+
+localrules: write_scf, run_scf, convertpw, write_opt
+
+# ============== RULES ==============
+rule all:
+  input: targets
+
+rule write_scf:
+  output: fscf_inp
+  run:
+    rs = float(wildcards.rs)
+    threshold = '1.0d-10'
+    nelec = int(wildcards.nelec)
+    vq = float(wildcards.vq) * float(wildcards.alpha)
+    qx = int(wildcards.qx)
+    qy = int(wildcards.qy)
+    qz = int(wildcards.qz)
+    func = wildcards.func
+    epre = float(wildcards.epre)
+    cmd = 'python3 workflow/wcospot.py -o %s' % output[0]
+    cmd += ' --thr %s' % threshold
+    cmd += ' --rs %f --nelec %d' % (rs, nelec)
+    cmd += ' --func %s -epre %f' % (func, epre)
+    cmd += ' --vq %f --qx %d --qy %d --qz %d' % (2*vq, qx, qy, qz)
+    shell(cmd)
+
+rule run_scf:
+  input: ancient('{path}/{pre}scf.inp')
+  output: '{path}/{pre}scf.out'
+  run:
+    cmd = run_cmd(cmds['pw'], input[0])
+    shell(cmd)
+
+rule convertpw:
+  input: fscf_inp, fscf_out
+  output: feinspline
+  run:
+    import os
+    from qharv.cross import pwscf
+    CMD = cmds['p2q']
+    finp = input[0]
+    dsave = pwscf.find_save(finp)
+    fxml = os.path.join(dsave, 'data-file-schema.xml')
+    cmd = '%s %s -o %s' % (CMD, fxml, output[0])
+    shell(cmd)
+
+rule write_opt:
+  input: feinspline, fscf_inp
+  output: fopt_inp
+  run:
+    vq = float(wildcards.vq)
+    cmd = 'python3 workflow/wdmc.py %s' % input[0]
+    cmd += ' -i %s -o %s' % (input[1], output[0])
+    cmd += ' --nopt 12 --no_moire --vcospot %f' % vq
+    shell(cmd)
+
+rule run_qmc:
+  input: '{path}/{prefix}.xml'
+  output: '{path}/{prefix}.out'
+  run:
+    if wildcards.prefix not in ['vmc', 'opt']:
+      msg = 'wrong rule for %s' % input[0]
+      raise RuntimeError(msg)
+    cmd = run_cmd(cmds['qmc'], input[0])
+    shell(cmd)

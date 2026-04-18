@@ -1,0 +1,538 @@
+import numpy as np
+import sys, os
+sys.path.insert(0, workflow.basedir)
+from qharv.cross.snake import run_cmd
+import alpha_scan
+from guess_alpha_funcs import guess_alpha0, guess_alpha1, guess_alpha2
+
+apath = 'runs/rs{rs}-n{nelec}/qv{qx}_{qy}_{qz}-vq{vq}/{func}-e{epre}-qa{alpha}'
+fscf_inp = '%s/scf/scf.inp' % apath
+fscf_out = fscf_inp[:-4]+'.out'
+feinspline = '%s/scf/eshdf.h5' % apath
+fopt_inp = '%s/opt-sj/opt.xml' % apath
+fopt_out = fopt_inp[:-4]+'.out'
+fbopt_inp = '%s/opt-sjb/opt.xml' % apath
+fbopt_out = fbopt_inp[:-4]+'.out'
+
+# --- Alpha scan subgraph (per (rs, Ne, q, vq)) ---
+scan_path = 'runs/rs{rs}-n{nelec}/qv{qx}_{qy}_{qz}-vq{vq}/scan/{func}-e{epre}-qa{alpha}'
+fscan_scf_inp = '%s/scf/scf.inp' % scan_path
+fscan_scf_out = fscan_scf_inp[:-4]+'.out'
+fscan_eins    = '%s/scf/eshdf.h5' % scan_path
+fscan_opt_inp = '%s/opt-sj/opt.xml' % scan_path
+fscan_opt_out = fscan_opt_inp[:-4]+'.out'
+
+# Forbid wildcards from swallowing path separators (otherwise {vq} can match
+# '0.00000/scan' and the scan-vs-production rule split becomes ambiguous).
+wildcard_constraints:
+    rs    = r"[0-9.]+",
+    nelec = r"[0-9]+",
+    qx    = r"-?[0-9]+",
+    qy    = r"-?[0-9]+",
+    qz    = r"-?[0-9]+",
+    vq    = r"[0-9.]+",
+    func  = r"[a-zA-Z0-9]+",
+    epre  = r"[0-9.]+",
+    alpha = r"[0-9.]+",
+    wf    = r"[a-z]+",
+    tproj = r"[0-9.]+",
+    ts    = r"[0-9.]+",
+    nwtot = r"[0-9]+",
+
+subdir = 't{tproj}-ts{ts}-nw{nwtot}'
+fdmc_inp = '%s/{wf}-%s/dmc.xml' % (apath, subdir)
+fdmc_out = fdmc_inp[:-4]+'.out'
+fdmc_csv = fdmc_inp[:-4]+'.csv'
+
+# Production target is the point_done flag (resolved via the
+# alpha_select / finalize_alpha checkpoint chain).
+
+def gen_qidx(mq):
+    ql = []
+    for qx in range(mq):
+        for qy in range(qx+1):
+            for qz in range(qy+1):
+                ql.append([qx, qy, qz])
+
+    ql.sort(key=lambda q: q[0]**2 + q[1]**2 + q[2]**2)
+    return ql[1:]
+
+
+funcs = ['ni']
+vq_max = { 2: 0.02000,
+           5: 0.01200,
+          10: 0.00400,
+          15: 0.00100,
+          20: 0.00100,
+          30: 0.00060,
+          50: 0.00050,
+          60: 0.00040
+          }
+
+nelec = 162
+rsl = [80]
+vql =[0.0004]#np.arange(0,0.0025,0.0005)  # [0.000,...,0.002]; vq=0 used as E0 referencei
+
+qidxl = gen_qidx(5)[::5]
+
+wf = 'sj'
+tpmult = 15.625
+nwalker = 1024
+
+rsl = ['%.1f' % rs for rs in rsl]
+vql = ['%.5f' % vq for vq in vql]
+
+
+# --- Initial alpha scan grid: wide uniform [0.05, 1.50], no centering ---
+# alpha_opt shifts with vq so a fixed-center grid misses the minimum at
+# large vq. All vq at a given (rs, Ne, q) use the same grid.
+SCAN_HALFWIDTH_INIT = 0.25   # kept for rescan_shift only
+SCAN_NPOINTS_INIT = 10
+MAX_ALPHA_ITER = 3
+_alpha_grid_cache = {}
+
+def alpha_grid_for(rs, nelec, qidx):
+    key = (float(rs), int(nelec), tuple(qidx))
+    guess_alpha = guess_alpha0 if float(rs) <= 5 else guess_alpha1 if float(rs) < 21 else guess_alpha2
+    if key not in _alpha_grid_cache:
+        _alpha_grid_cache[key] = alpha_scan.make_alpha_grid_uniform(
+            n=SCAN_NPOINTS_INIT,
+            hi=min(guess_alpha(float(rs), int(nelec), list(qidx)) * 2 , 1.5),
+        )
+    return _alpha_grid_cache[key]
+
+# Per-iteration JSON path written by checkpoint alpha_select.
+alpha_iter_json = ('runs/rs{rs}-n{nelec}/qv{qx}_{qy}_{qz}-vq{vq}/'
+                   '{func}-e{epre}-alpha_iter{iteration}.json')
+alpha_selected_json = ('runs/rs{rs}-n{nelec}/qv{qx}_{qy}_{qz}-vq{vq}/'
+                       '{func}-e{epre}-alpha_selected.json')
+point_done_flag = ('runs/rs{rs}-n{nelec}/qv{qx}_{qy}_{qz}-vq{vq}/'
+                   '{func}-e{epre}-{wf}-t{tproj}-ts{ts}-nw{nwtot}.point_done')
+alpha_manifest_json = 'runs/alpha_manifest_rs{rs}-n{nelec}.json'
+alpha_failed_report  = 'runs/alpha_failed_report_rs{rs}-n{nelec}.json'
+
+# --- Targets ---
+# Phase 3: target = alpha_selected.json per (rs, Ne, q, vq).
+# Phase 4 will replace this with the production DMC csv resolved through
+# the checkpoint.
+targets = []                  # production point_done flags (Phase 4)
+targets_alpha = []            # alpha_selected.json files (Phase 3, kept for debug)
+
+t1 = expand(point_done_flag, allow_missing=True,
+  wf=wf, nelec=nelec, vq=vql, func=funcs, epre=125
+)
+ta1 = expand(alpha_selected_json, allow_missing=True,
+  nelec=nelec, vq=vql, func=funcs, epre=125
+)
+for qidx in qidxl:
+  t2 = expand(t1, allow_missing=True,
+    qx=qidx[0], qy=qidx[1], qz=qidx[2]
+  )
+  ta2 = expand(ta1, allow_missing=True,
+    qx=qidx[0], qy=qidx[1], qz=qidx[2]
+  )
+  for rs in rsl:
+    rs = float(rs)
+    ts = rs/(12*nelec**0.5) if wf == 'sjb' else rs/20
+    tproj = tpmult*nelec*rs
+    qmc_kws = dict(
+      wf = wf,
+      tproj = tproj,
+      ts = '%.4f' % ts,
+      nwtot = nwalker,
+    )
+    t3 = expand(t2, allow_missing=False, rs=rs, **qmc_kws)
+    targets += t3
+
+    ta3 = expand(ta2, allow_missing=False, rs=rs)
+    targets_alpha += ta3
+
+nk2 = 6
+nproc = 96
+cmds = dict(
+  pw = 'unset SLURM_JOBID; source /mnt/home/mgunes/software/q-e/dev.sh; mpirun -np %d pw.x -nb %d -in' % (nk2, nk2),
+  p2q = 'unset SLURM_JOBID; source /mnt/home/mgunes/software/qmcpack/env.sh; mpirun -n 1 convertpw4qmc',
+  dmc = ' source /mnt/home/mgunes/software/qmcpack/env.sh; mpirun -np %d qmcpack_complex' % nproc,
+)
+
+localrules: write_scf, run_scf, convertpw, write_opt, write_dmc, sdat, write_scf_scan, convertpw_scan, write_opt_scan, alpha_select, finalize_alpha, point_done, aggregate_alpha_manifest, write_params_report
+
+manifest_targets = expand(alpha_manifest_json, rs=rsl, nelec=nelec)
+params_targets = expand('runs/rs{rs}-n{nelec}/params.json', rs=rsl, nelec=[nelec])
+
+rule all:
+  input: targets + manifest_targets + params_targets
+
+rule write_params_report:
+  output: 'runs/rs{rs}-n{nelec}/params.json'
+  run:
+    import json, subprocess
+    try:
+      git_hash = subprocess.check_output(
+        ['git', 'rev-parse', 'HEAD'], cwd=workflow.basedir
+      ).decode().strip()
+    except Exception:
+      git_hash = 'unknown'
+    params = dict(
+      rs=wildcards.rs, nelec=wildcards.nelec,
+      vql=vql, qidxl=[list(q) for q in qidxl],
+      wf=wf, nwalker=nwalker, tpmult=tpmult, funcs=funcs,
+      git_hash=git_hash,
+    )
+    os.makedirs(os.path.dirname(output[0]), exist_ok=True)
+    with open(output[0], 'w') as f:
+      json.dump(params, f, indent=2)
+
+def _scf_cmd(output, wildcards):
+    vq = float(wildcards.vq) * float(wildcards.alpha)
+    cmd  = 'python3 workflow/wcospot.py -o %s' % output[0]
+    cmd += ' --rs %f --nelec %d' % (float(wildcards.rs), int(wildcards.nelec))
+    cmd += ' --func %s -epre %f' % (wildcards.func, float(wildcards.epre))
+    cmd += ' --vq %f --qx %d --qy %d --qz %d' % (
+        2*vq, int(wildcards.qx), int(wildcards.qy), int(wildcards.qz))
+    return cmd
+
+def _opt_cmd(input, output, wildcards):
+    cmd  = 'python3 workflow/wdmc.py %s' % input[0]
+    cmd += ' -i %s -o %s' % (input[1], output[0])
+    cmd += ' --nopt 12 --no_moire --vcospot %f' % float(wildcards.vq)
+    return cmd
+
+rule write_scf:
+  output: fscf_inp
+  run: shell(_scf_cmd(output, wildcards))
+
+rule run_scf:
+  threads: 6
+  input: ancient('{path}/{pre}scf.inp')
+  output:
+    out = '{path}/{pre}scf.out'
+    #done = '{path}/{pre}.scf_done'
+  run:
+    cmd = run_cmd(cmds['pw'], input[0])
+    shell(cmd)
+    #shell(r"""
+    #  set -e
+    #  {cmd}
+    #  grep -q "JOB DONE\." {output.out}
+    #  touch {output.done}
+    #""")
+
+rule convertpw:
+  input: fscf_inp, fscf_out
+  output: feinspline
+  run:
+    import os
+    from qharv.cross import pwscf
+    CMD = cmds['p2q']
+    finp = input[0]
+    dsave = pwscf.find_save(finp)
+    fxml = os.path.join(dsave, 'data-file-schema.xml')
+    cmd = '%s %s -o %s' % (CMD, fxml, output[0])
+    shell(cmd)
+
+rule write_opt:
+  input: feinspline, fscf_inp
+  output: fopt_inp
+  run: shell(_opt_cmd(input, output, wildcards))
+
+rule write_bopt:
+  input: fopt_inp, fopt_out
+  output: fbopt_inp
+  run:
+    fopt_out = input[0]
+    fopt_inp = fopt_out.replace(".out", ".xml")
+    fout = output[0]
+    ts_frac = 0.1
+    cmd = 'python3 workflow/bopt.py -o %s -i %s --ts_frac %f' % (
+      fout, fopt_inp, ts_frac)
+    # need lots of samples to properly optimize the backflow
+    cmd += ' --nsample %d' % (576*1024)
+    shell(cmd)
+
+rule write_dmc:
+  input: '{path}/opt-{wf}/opt.xml', '{path}/opt-{wf}/opt.out'
+  output: '{path}/{wf}-%s/dmc.xml' % subdir
+  run:
+    tproj = float(wildcards.tproj)
+    ts = float(wildcards.ts)
+    nw = int(wildcards.nwtot)
+    cmd = "python3 workflow/o2dmc.py -o %s -i %s" % (output[0], input[0])
+    cmd += " --nwalker %d --timestep %f --tproj %f" % (nw, ts, tproj)
+    #cmd += ' --checkpoint 99'
+    if wildcards.wf == 'sjb':
+      cmd += ' -w'  # add warmup VMC
+    shell(cmd)
+
+rule run_qmc:
+  input: '{path}/{prefix}.xml'
+  output: '{path}/{prefix}.out'
+  run:
+    if wildcards.prefix not in ['vmc', 'opt', 'dmc']:
+      msg = 'wrong rule for %s' % input[0]
+      raise RuntimeError(msg)
+    cmd = run_cmd(cmds['dmc'], input[0])
+    shell(cmd)
+
+rule sdat:
+  input: fdmc_inp, fdmc_out
+  output: fdmc_csv
+  run:
+    wf = wildcards.wf
+    if wf == 'sj':
+      neql = [16, 64, 32]
+    elif wf == 'sjb':
+      neql = [64, 32, 256, 128]
+    cmd = 'python3 workflow/energy.py'
+    cmd += ' -i %s -o %s' % (input[0], output[0])
+    for neq in neql:
+      cmd += ' -e %d' % neq
+    shell(cmd)
+
+# ============================================================
+# Alpha scan subgraph
+# Mirrors write_scf, convertpw, write_opt but writes outputs under
+# runs/.../scan/{func}-e{epre}-qa{alpha}/.
+# Uses the existing generic run_scf and run_qmc rules for execution
+# (their wildcards already match the scan path).
+# ============================================================
+
+rule write_scf_scan:
+  output: fscan_scf_inp
+  run: shell(_scf_cmd(output, wildcards))
+
+rule convertpw_scan:
+  input: fscan_scf_inp, fscan_scf_out
+  output: fscan_eins
+  run:
+    import os
+    from qharv.cross import pwscf
+    CMD = cmds['p2q']
+    finp = input[0]
+    dsave = pwscf.find_save(finp)
+    fxml = os.path.join(dsave, 'data-file-schema.xml')
+    cmd = '%s %s -o %s' % (CMD, fxml, output[0])
+    shell(cmd)
+
+rule write_opt_scan:
+  input: fscan_eins, fscan_scf_inp
+  output: fscan_opt_inp
+  run: shell(_opt_cmd(input, output, wildcards))
+
+# ============================================================
+# Phase 3 — alpha_select checkpoint chain
+#
+# Each iteration n in [0, MAX_ALPHA_ITER] produces a JSON
+# {func}-e{epre}-alpha_iter{n}.json. The iteration n=0 evaluates the
+# initial grid; iteration n>0 evaluates the next_alphas requested by
+# iteration n-1's rescan. After each iteration the JSON is interpreted by
+# finalize_alpha which walks iter0..N looking for the first one with status
+# in {ok, failed} and copies it to alpha_selected.json.
+# ============================================================
+
+import json as _json
+
+def _alphas_for_iter(wildcards):
+    """Return the list of alpha strings to evaluate at this iteration."""
+    if float(wildcards.vq) == 0.0:
+        return []   # vq=0: no scan needed; select_alpha returns alpha_opt=0 directly
+    n = int(wildcards.iteration)
+    if n == 0:
+        return alpha_grid_for(wildcards.rs, wildcards.nelec,
+                              [int(wildcards.qx), int(wildcards.qy),
+                               int(wildcards.qz)])
+    prev = alpha_iter_json.format(
+        rs=wildcards.rs, nelec=wildcards.nelec,
+        qx=wildcards.qx, qy=wildcards.qy, qz=wildcards.qz,
+        vq=wildcards.vq, func=wildcards.func, epre=wildcards.epre,
+        iteration=n - 1,
+    )
+    if not os.path.exists(prev):
+        return []
+    with open(prev) as f:
+        data = _json.load(f)
+    return list(data.get('next_alphas', []))
+
+def _scan_outs_for_iter(wildcards):
+    """Snakemake input function: opt.out paths for this iteration's alphas."""
+    alphas = _alphas_for_iter(wildcards)
+    return [fscan_opt_out.format(
+        rs=wildcards.rs, nelec=wildcards.nelec,
+        qx=wildcards.qx, qy=wildcards.qy, qz=wildcards.qz,
+        vq=wildcards.vq, func=wildcards.func, epre=wildcards.epre,
+        alpha=a) for a in alphas]
+
+def _prev_iter_input(wildcards):
+    n = int(wildcards.iteration)
+    if n == 0:
+        return []
+    return [alpha_iter_json.format(
+        rs=wildcards.rs, nelec=wildcards.nelec,
+        qx=wildcards.qx, qy=wildcards.qy, qz=wildcards.qz,
+        vq=wildcards.vq, func=wildcards.func, epre=wildcards.epre,
+        iteration=n - 1)]
+
+checkpoint alpha_select:
+  input:
+    scan = _scan_outs_for_iter,
+    prev = _prev_iter_input,
+  output: alpha_iter_json
+  wildcard_constraints:
+    iteration = r"[0-9]+",
+  run:
+    n = int(wildcards.iteration)
+    new_alphas = _alphas_for_iter(wildcards)
+    new_E = [alpha_scan.load_vmc_energy(p) for p in input.scan]
+
+    if n == 0:
+      cum_alphas = list(new_alphas)
+      cum_E = list(new_E)
+      halfwidth = SCAN_HALFWIDTH_INIT
+    else:
+      with open(input.prev[0]) as f:
+        pj = _json.load(f)
+      cum_alphas = [str(a) for a in pj['alpha_grid']] + list(new_alphas)
+      cum_E = [(e, de) for e, de in zip(pj['E_grid'], pj['dE_grid'])] + list(new_E)
+      halfwidth = float(pj['halfwidth'])   # rescan_widen removed; only rescan_shift possible
+
+    sel = alpha_scan.select_alpha(
+      rs=float(wildcards.rs),
+      nelec=int(wildcards.nelec),
+      qidx=[int(wildcards.qx), int(wildcards.qy), int(wildcards.qz)],
+      vq=float(wildcards.vq),
+      alpha_grid=cum_alphas,
+      energies=cum_E,
+      iteration=n,
+      halfwidth=halfwidth,
+      max_iterations=MAX_ALPHA_ITER + 1,
+    )
+    os.makedirs(os.path.dirname(output[0]), exist_ok=True)
+    with open(output[0], 'w') as f:
+      f.write(sel.to_json())
+
+def _finalize_alpha_input(wildcards):
+    """Walk iter0..MAX_ALPHA_ITER and return the JSON of the first iteration
+    whose status is not a rescan. Forces upstream checkpoint runs as needed."""
+    last_path = None
+    for n in range(MAX_ALPHA_ITER + 1):
+      ck = checkpoints.alpha_select.get(
+        rs=wildcards.rs, nelec=wildcards.nelec,
+        qx=wildcards.qx, qy=wildcards.qy, qz=wildcards.qz,
+        vq=wildcards.vq, func=wildcards.func, epre=wildcards.epre,
+        iteration=str(n))
+      last_path = ck.output[0]
+      with open(last_path) as f:
+        data = _json.load(f)
+      if data['status'] not in ('rescan_shift',):
+        return [last_path]
+    return [last_path]
+
+checkpoint finalize_alpha:
+  input: _finalize_alpha_input
+  output: alpha_selected_json
+  run:
+    import shutil
+    shutil.copyfile(input[0], output[0])
+
+# ============================================================
+# Phase 4 — production target driven by alpha_selected.json
+# ============================================================
+
+# Per-point sentinel marks the production work done. Its input function
+# resolves the alpha picked by the alpha_select chain and routes either to
+# the production DMC csv (status=ok) or alpha_selected.json (status=failed
+# → DMC skipped for this point).
+
+def _production_input(wildcards):
+    ck = checkpoints.finalize_alpha.get(
+      rs=wildcards.rs, nelec=wildcards.nelec,
+      qx=wildcards.qx, qy=wildcards.qy, qz=wildcards.qz,
+      vq=wildcards.vq, func=wildcards.func, epre=wildcards.epre)
+    fjson = ck.output[0]
+    with open(fjson) as f:
+      data = _json.load(f)
+    if data['status'] != 'ok' or data.get('alpha_opt') is None:
+      # Alpha scan failed — skip DMC entirely. The failed report (written by
+      # aggregate_alpha_manifest) will list the scan data for manual fixing.
+      return [fjson]
+    alpha_str = '%.3f' % float(data['alpha_opt'])
+    # HACK !!!!!!! fdmc_csv  --> fdmc_inp
+    return [fjson, fdmc_inp.format(
+      rs=wildcards.rs, nelec=wildcards.nelec,
+      qx=wildcards.qx, qy=wildcards.qy, qz=wildcards.qz,
+      vq=wildcards.vq, func=wildcards.func, epre=wildcards.epre,
+      alpha=alpha_str, wf=wildcards.wf,
+      tproj=wildcards.tproj, ts=wildcards.ts, nwtot=wildcards.nwtot)]
+
+rule point_done:
+  input: _production_input
+  output: touch(point_done_flag)
+  # All work happens via the inputs; output is a touched flag.
+
+# ============================================================
+# Phase 5 — alpha manifest aggregation
+# Consolidates per-(rs, Ne, q, vq) alpha_selected.json files into one
+# manifest the post-processing can read directly.
+# ============================================================
+
+def _manifest_inputs(wildcards):
+    rs_str = wildcards.rs
+    nelec_i = int(wildcards.nelec)
+    out = []
+    for qidx in qidxl:
+      for vqs in vql:
+        for func in funcs:
+          ck = checkpoints.finalize_alpha.get(
+            rs=rs_str, nelec=nelec_i,
+            qx=qidx[0], qy=qidx[1], qz=qidx[2],
+            vq=vqs, func=func, epre='125')
+          out.append(ck.output[0])
+    return out
+
+rule aggregate_alpha_manifest:
+  input: _manifest_inputs
+  output:
+    manifest = alpha_manifest_json,
+    failed   = alpha_failed_report,
+  run:
+    manifest = {
+      'rs': float(wildcards.rs),
+      'nelec': int(wildcards.nelec),
+      'entries': {},
+    }
+    failed_entries = []
+    for fjson in input:
+      with open(fjson) as f:
+        d = _json.load(f)
+      qx, qy, qz = d['qidx']
+      key = '%d_%d_%d/%s' % (qx, qy, qz, ('%.5f' % float(d['vq'])))
+      manifest['entries'][key] = {
+        'alpha_opt': d.get('alpha_opt'),
+        'status': d['status'],
+        'reason': d.get('reason', ''),
+        'iteration': d.get('iteration'),
+        'curvature_a': d.get('curvature_a'),
+        'snr': d.get('snr'),
+        'chi2_red': d.get('chi2_red'),
+      }
+      if d['status'] != 'ok':
+        failed_entries.append({
+          'q': [qx, qy, qz],
+          'vq': float(d['vq']),
+          'status': d['status'],
+          'reason': d.get('reason', ''),
+          'snr': d.get('snr'),
+          'chi2_red': d.get('chi2_red'),
+          'alpha_grid': d.get('alpha_grid', []),
+          'E_grid':     d.get('E_grid', []),
+          'dE_grid':    d.get('dE_grid', []),
+        })
+    with open(output.manifest, 'w') as f:
+      _json.dump(manifest, f, indent=2)
+    with open(output.failed, 'w') as f:
+      _json.dump({
+        'rs': float(wildcards.rs), 'nelec': int(wildcards.nelec),
+        'n_failed': len(failed_entries),
+        'note': 'DMC was skipped for these points. Fix alpha by hand and rerun.',
+        'failed': failed_entries,
+      }, f, indent=2)

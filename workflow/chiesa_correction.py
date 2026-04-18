@@ -1,0 +1,1257 @@
+import numpy as np
+from itertools import product
+# =========================== get long-range U(k) =========================== 
+
+
+def isotropic_jk2(jk2_dat, **kwargs):
+  """ extract ee long-range Jastrow from Jk2.dat 
+  Jk2.dat should have kx,ky,kz, coeff_real columns
+
+  This function currently assumes an extra coeff_imag columns and checks to 
+  make sure it is uniformly 0. Simply comment out the assert to remove.
+
+  Args:
+    jk2_dat (str): filename of Jk2.dat
+  Returns:
+    np.array, np.array: unique k-vector magnitudes, shell-averaged Jk2
+  """
+  import static_correlation as sc
+  data  = np.loadtxt(jk2_dat)
+  kvecs = data[:,:3]
+  jk2m  = -data[:,3]  # conform to finite temperature DM sign convention
+  assert np.allclose(data[:,4],0)  # imaginary part of Jk2 is zero
+  kmags = np.linalg.norm(kvecs,axis=1)
+  unique_k, unique_jk2 = sc.shell_avg_sofk(kvecs, jk2m, **kwargs)
+  return unique_k, unique_jk2
+# end def isotropic_jk2
+
+
+# ============================== get full U(k) ============================== 
+# The way FT[Usr] is loaded can be improved. Currently I read the sampled 
+# values of FT[Usr] on a 100-long 1D kgrid, then Bspline interpolate.
+# It would be better to read input file for Bspline knots directly, construct
+# Usr(r) as a function, then get FT at desired k vectors.
+# TODO: edit isotropic_ftur to do the above.
+
+
+def isotropic_ftur(ftur_dat,smear=100):                                         
+  import static_correlation as sc                                               
+  myk, fturm, fture = np.loadtxt(ftur_dat).T                                    
+  kint    = map(int,map(round,myk*smear))                                       
+  kshells = np.unique(kint)                                                     
+                                                                                
+  # shell average                                                               
+  sels  = [kint == kshell for kshell in kshells]                                
+  kvals = np.array([myk[sel].mean() for sel in sels])                           
+  ukvals= np.array([fturm[sel].mean() for sel in sels])                         
+  return kvals,ukvals                                                           
+# end def
+                                                                                
+                                                                                
+def isotropic_uk(kmags,jk2m,myk,fturm):                                         
+  import scipy.interpolate as interp                                            
+  tck = interp.splrep(myk,fturm)                                                
+                                                                                
+  dk = (kmags[1:] - kmags[:-1]).max()                                           
+  finek = np.concatenate([kmags, np.arange(kmags.max()+dk,myk.max(),dk)])       
+  finey = interp.splev(finek,tck)                                               
+  sel = finek <= kmags.max()                                                    
+  finey[sel] += jk2m                                                            
+  return finek, finey                                                           
+# end def
+                                                                                
+
+def get_uk(jk2_dat,ftur_dat):                                                   
+  # load isotropic long-range Jastrow                                           
+  kmags, jk2m = isotropic_jk2(jk2_dat)                                          
+                                                                                
+  # load FT[short-range Jastrow]                                                
+  myk, fturm  = isotropic_ftur(ftur_dat)                                        
+                                                                                
+  # construct full U(k)                                                         
+  totk, uk = isotropic_uk(kmags,jk2m,myk,fturm)                                 
+  return totk, uk                                                               
+# end def
+
+def chiesa_rpa_sk(k, alpha):
+  return 1.-np.exp(-alpha*k**2)
+
+chiesa_rpa_uk = lambda k,a,b:4*np.pi*a*(k**(-2)-(k**2+b**(-1))**(-1))
+drum_rpa_uk   = lambda k,A,B:4*np.pi*(A/k**2+B/k)
+
+def fit_rpa_uk(model, totk, uk, kmax):
+  import scipy.optimize as op
+  sel = (totk <= kmax)
+  popt,pcov = op.curve_fit(model,totk[sel],uk[sel])
+
+  fuk = lambda k:model(k,*popt)
+  return fuk,popt
+# end def
+
+
+def drum_uk(k, wp, kf):
+  """ swap parameters A,B out for effective plasmon freq. wp and Fermi kf """
+  A = 4*np.pi/wp
+  B = -2*np.pi**2/kf**2
+  return A/k**2+B/k
+
+# ================== basic routines for klist  ==================
+def cubic_pos(nx, ndim=3, indexing='ij'):
+  nlist = np.arange(nx)
+  xyz = np.meshgrid(*[nlist]*ndim, indexing=indexing)
+  pos = np.stack(xyz, axis=-1)
+  return pos.reshape(-1, ndim)
+
+
+def shifted_mp_grid(nx):
+  pos = cubic_pos(nx)/float(nx) + 0.5/nx
+  pos = (pos+0.5)%1-0.5
+  return pos
+
+
+def remove_com(pos):
+  """ remove the center of mass (com)
+  assume equally weighted particles
+
+  Args:
+    pos (np.array): position array
+  Return:
+    np.array: new position array with zero com
+  """
+  com = pos.mean(axis=0)
+  return pos - com[np.newaxis, :]
+
+
+def mirror_xyz(pos):
+  natom, ndim = pos.shape
+  new_pos = np.zeros([natom*2**ndim, ndim], dtype=pos.dtype)
+
+  iflip = 0
+  for dim_mult in product([-1, 1], repeat=ndim):
+    pos1 = pos.copy()
+    for idim, mult in zip(xrange(ndim), dim_mult):
+      pos1[:, idim] *= mult
+    new_pos[natom*iflip:natom*(iflip+1)] = pos1
+    iflip += 1
+  # end for
+
+  return new_pos
+
+
+def get_kshells(nsh, raxes):
+  ukvecs = remove_com( cubic_pos(nsh*2+1) )
+  kvecs  = np.dot(ukvecs, raxes)
+  return kvecs
+
+
+def get_jk_kvecs(fout,
+  header = 'kSpace coefficient groups',
+  trailer = 'QMCHamiltonian::addOperator'):
+  """ parse QMCPACK output for kSpace Jastrow kvecs """
+  from qharv.reel import ascii_out
+
+  mm   = ascii_out.read(fout)
+  text = ascii_out.block_text(mm, header, trailer)
+
+  data = []
+  for line in text.split('\n'):
+    tokens = line.split()
+    if len(tokens) != 4: continue
+    data.append( map(float, tokens) )
+
+  data  = np.array(data)
+  kvecs = data[:,:3]
+  kmags = data[:,3]
+  return kvecs
+
+# ================ routines for structure factor S(k)  ================
+
+
+def heg_kfermi(rs, ndim=3):
+  """ magnitude of the fermi k vector for the homogeneous electron gas (HEG)
+
+  Args:
+    rs (float): Wigner-Seitz radius
+  Return:
+    float: kf
+  """
+  rho = charge_density(rs, ndim=ndim)
+  kf = ((2*np.pi)**ndim*rho/solid_angle(ndim)/2)**(1./ndim)
+  return kf
+
+
+def hfsk(karr, kf, ndim=3):
+  """ static structure factor of non-interacting Fermions
+  Args:
+    karr (np.array): k vector magnitudes
+    kf (float): Fermi k vector magnitude
+  Return:
+    float: S0(k, kf)
+  """
+  kmags = abs(karr)
+  skm = np.ones(len(karr))
+  sel = np.where(kmags<2*kf)
+  if ndim == 3:
+    skm[sel] = 3*kmags[sel]/(4*kf)-kmags[sel]**3/(16*kf**3)
+  elif ndim == 2:
+    y = kmags[sel]/(2*kf)
+    skm[sel] = 2./np.pi*(np.arcsin(y)+y*(1-y**2)**(1./2))
+  else:
+    msg = 'ndim = %d' % ndim
+    raise RuntimeError(msg)
+  return skm
+
+
+def effective_fsk_from_fuk(fuk, rs):
+  """ construct S(k) from U(k) assuming HEG kf and RPA """
+  density = (4*np.pi*rs**3/3)**(-1)
+  kf = heg_kfermi(rs)
+  return lambda k:(hfsk(k, kf)**(-1) + 2*density*fuk(k))**(-1)
+
+
+def effective_fuk_from_fsk(fsk, rs):
+  """ construct U(k) from S(k) assuming HEG kf and RPA """
+  density = (4*np.pi*rs**3/3)**(-1)
+  kf = heg_kfermi(rs)
+  return lambda k:( fsk(k)**(-1) - hfsk(k, kf)**(-1) )/(2*density)
+
+
+def load_dsk(fjson, obs='dsk'):
+  import pandas as pd
+  df = pd.read_json(fjson)
+  kvecs = np.array(df.loc[0,'kvecs'])
+  skm   = np.array(df.loc[0,'%s_mean'%obs])
+  ske   = np.array(df.loc[0,'%s_error'%obs])
+  return kvecs, skm, ske
+
+def legal_kvecs(raxes, nup, twist=None):
+  ndim = len(raxes)
+  if twist is None:
+    twist = np.zeros(ndim)
+  # estimate grid size needed
+  nx = int(round(nup**(1./ndim)))
+  # create reciprocal grid around twist
+  gvecs = cubic_pos(2*nx+1, ndim=ndim)-nx
+  kvecs = np.dot(gvecs+twist, raxes)
+  return kvecs
+
+def ideal_kinetic(raxes, nup, twist=None):
+  kvecs = legal_kvecs(raxes, nup, twist=twist)
+  # gksort
+  kmags = np.linalg.norm(kvecs, axis=-1)
+  idx = np.argsort(kmags)
+  # occupy lowest
+  myk = kmags[idx[:nup]]
+  tkin = 0.5*np.dot(myk, myk)
+  return tkin
+
+def ideal_coulomb_sum(kvecs, qtol=1e-8):
+  """1/2*Sum_{k!=k'} v_{k-k'}
+
+  Args:
+    kvecs (np.array): (npw, ndim)
+  Return:
+    float: sum of coulomb interaction between all unique pairs of PWs
+  Example:
+    >>> csum = ideal_coulomb_sum(kvecs)
+    >>> ex = vmad-csum/volume
+  """
+  csum = 0.0
+  nterm = 0
+  npw, ndim = kvecs.shape
+  for k1 in kvecs:
+    for k2 in kvecs:
+      q = np.linalg.norm(k1-k2)
+      if q < qtol:
+        continue
+      nterm += 1
+      vq = coulomb_interaction(q, ndim=ndim)
+      csum += vq
+  assert nterm == (npw-1)*npw
+  return csum/2
+
+def pwdet_energy(kvecs, axes):
+  from qharv.inspect import axes_pos
+  nup, ndim = kvecs.shape
+  if ndim > 2:
+    kz = kvecs[:, 2]
+    if np.allclose(kz, 0):
+      msg = '2D calculation?'
+      raise RuntimeError(msg)
+  assert len(axes) == ndim
+  tkin = 0.5*sum([np.dot(k, k) for k in kvecs])
+  esum = ideal_coulomb_sum(kvecs)
+  vmad = axes_pos.madelung(axes)
+  volume = axes_pos.volume(axes)
+  ex = vmad*nup-esum/volume
+  return tkin, ex
+
+# ================ routines for jastrow potential U(k)  ================
+
+def polarization_factor(p, ndim=3):
+  expo = (ndim+2.)/ndim
+  plus = (1+p)**expo
+  minus = (1-p)**expo
+  fac = (plus+minus)/2
+  return fac
+
+def plasmon_dispersion(k):
+  ek = k**2/2  # ha atomic units
+  return ek
+
+def coulomb_interaction(k, ndim=3, dgate=None):
+  vk = 2*(ndim-1)*np.pi/k**(ndim-1)
+  if dgate is not None:
+    vk *= np.tanh(k*dgate)
+  return vk
+
+def solid_angle(ndim):
+  return 2*(ndim-1)*np.pi/ndim
+
+def charge_density(rs, ndim=3):
+  vol = solid_angle(ndim)*rs**ndim
+  rho = 1./vol
+  return rho
+
+def gaskell_rpa_uk(k, rs, kf, ndim=3):
+  sk0 = hfsk(k, kf, ndim=ndim)  # determinant contribution S0(k)
+  rho = charge_density(rs, ndim=ndim)
+  vk = coulomb_interaction(k, ndim=ndim)
+  ek = plasmon_dispersion(k)
+  arg2sqrt  = sk0**(-2) + 2*rho*vk/ek
+  uk = ( -sk0**(-1) + arg2sqrt**0.5 )/(2*rho)
+  return uk
+
+def gaskell_rpa_sk(k, rs, kf, ndim=3, dgate=None):
+  rho = charge_density(rs, ndim=ndim)
+  sk0 = hfsk(k, kf, ndim=ndim)
+  vk = coulomb_interaction(k, ndim=ndim, dgate=dgate)
+  ek = plasmon_dispersion(k)
+  sk = 1./np.sqrt(1/sk0**2+2*vk*rho/ek)
+  return sk
+
+def sk2uk(myk, mysk, rs, ndim=3):
+  rho = charge_density(rs, ndim=ndim)
+  kf = heg_kfermi(rs, ndim=ndim)
+  sk0 = hfsk(myk, kf, ndim=ndim)
+  return (mysk**(-1)-sk0**(-1))/(2*rho)
+
+def slater_jrpa_sk(kvecs, detsk, rho):
+  kmags = np.linalg.norm(kvecs, axis=1)
+  ek = 0.5*kmags**2
+  vk = 4*np.pi/kmags**2
+  ak = 2*rho*vk/ek  # 16\pi\rho/k^4
+  sk = (1./detsk**2+ak)**(-0.5)
+  return sk
+
+
+def mixed_rpa_sk(k, rs, sk0, ktf):
+  rho = 3./(4*np.pi*rs**3)
+  vk = 4*np.pi/k**2
+  vk1 = 4*np.pi/(k**2+ktf**2)
+  ek = 0.5*k**2
+
+  ak = 1.+2*rho*sk0**2*vk/ek
+  ak1 = 1.+2*rho*sk0**2*vk1/ek
+  return sk0*( 2./(ak**0.5+ak1**0.5) )
+
+
+def screened_rpa_sk(finek, rs, kf, ktf):
+  sk0 = hfsk(finek, kf)
+  rho = 3./(4*np.pi*rs**3)
+  vk = 4*np.pi/(finek**2+ktf**2)
+  ek = 0.5*finek**2
+  sk = (sk0**(-2)+2*rho*vk/ek)**(-0.5)
+  return sk
+
+
+def mass_rpa_sk(finek, rs, kf, mass):
+  sk0 = hfsk(finek, kf)
+  rho = 3./(4*np.pi*rs**3)
+  vk = 4*np.pi/finek**2
+  ek = 0.5*mass*finek**2
+  sk = (sk0**(-2)+2*rho*vk/ek)**(-0.5)
+  return sk
+
+
+def ceperley_rpa_uk(k, rs):
+
+  # build pieces
+  vol = (4*np.pi/3*rs**3)
+  ak = 12/rs**3/k**4  # k in units of rs
+
+  # put pieces together
+  uk = vol* 0.5*(-1+(1+ak)**0.5)
+  return uk
+
+
+def gammak(uk, skm, rs):
+  wp = np.sqrt(3./rs**3)
+  gkm = 2*wp*skm/uk**2
+  return gkm**2
+
+def gk2me(uk, skm, ske, rs):
+  wp = np.sqrt(3./rs**3)
+  a = 2*wp/uk**2
+  gkm = a*skm
+  gk2m = gkm**2
+  gk2e = 2*a**2*skm*ske
+  return gk2m, gk2e
+
+def bspline(coeff, cusp, rcut):
+  """ wrap over Mark's Python equivalent of BsplineFunctor in QMCPACK
+
+  Args:
+    rcut (float): real-space cutoff
+    coeff (list): a list of floats as Bspline knots
+    cusp (float, optional): up-down cusp, default -0.50
+  Return:
+    callable: short-range Jastrow potential
+  """
+  from jastrow import create_jastrow_from_param
+  bsp = create_jastrow_from_param(coeff, cusp, rcut)
+  def func(r):
+    return bsp.evaluate_v(r)
+  return func
+
+
+def fusr(rcut, uu_coeff, ud_coeff, uu_cusp=-0.25, ud_cusp=-0.50):
+  """ construct short-range Jastrow potential function
+  using Bspline knots in QMCPACK
+
+  Args:
+    rcut (float): real-space cutoff
+    uu_coeff (list): a list of floats for up-up Jastrow Bspline knots
+    ud_coeff (list): a list of floats for up-down Jastrow Bspline knots
+    uu_cusp (float, optional): up-up cusp, default -0.25 
+    ud_cusp (float, optional): up-down cusp, default -0.50
+  Return:
+    callable: short-range Jastrow potential
+  """
+  juu = bspline(uu_coeff, uu_cusp, rcut)
+  if ud_coeff is None:
+    return juu
+  jud = bspline(ud_coeff, ud_cusp, rcut)
+  def func(r):  # QMCPACK formula: simple average
+    return 0.5*(juu(r)+jud(r))
+  return func
+
+
+def get_fusr(node, rcut):
+  # read spline knots
+  cuu_name = 'uu'
+  uu_node = node.find('.//coefficients[@id="%s"]'%cuu_name)
+  uu_coeff = np.array(uu_node.text.split(), dtype=float)
+
+  cud_name = 'ud'
+  ud_node = node.find('.//coefficients[@id="%s"]'%cud_name)
+  if ud_node is None:
+    ud_coeff = None
+  else:
+    ud_coeff = np.array(ud_node.text.split(), dtype=float)
+
+  # construct e-e Usr(r)
+  j2sr = fusr(rcut, uu_coeff, ud_coeff)
+  return j2sr
+
+def evaluate_ft(myk, j2sr, rcut):
+  """ return FT[Usr] at given k magnitudes
+  assume Bspline Jastrow for 'uu' and 'ud' are in QMCPACK xml input format
+  contained in 'node'
+
+  Args:
+    myk (list): a list of k vector magnitudes to evaluate FT[Usr] on
+    j2sr (callable): U(r)
+    rcut (float): coordinate-space cutoff radius
+  """
+  from scipy.integrate import quad
+  # perform spherical FT
+  integrand = lambda r, k: r*np.sin(k*r)/k* j2sr(r)
+  intval = lambda k: quad(lambda r:integrand(r, k), 0, rcut)[0]
+  ft = 4*np.pi* np.array([intval(k) for k in myk])
+  return ft
+
+
+# =========================== density quantities =========================== 
+
+
+def rs_kf_wp(rho):
+  rs = (3./(4*np.pi*rho))**(1./3)
+  kf = (3*np.pi**2*rho)**(1./3)
+  wp = (4*np.pi*rho)**0.5
+  return rs, kf, wp
+
+
+# =========================== pure RPA FSC ===========================
+
+
+def mp_grid(raxes, nx):
+  """ shifted uniform grid
+  Args:
+    raxes (np.array): reciprocal space lattice
+    nx (int): number of grid points in each dimension
+  """
+  ndim = len(raxes)
+  ugrid = 1./nx* cubic_pos(nx, ndim=ndim)
+  ucom = ugrid.mean(axis=0)
+  ugrid -= ucom[np.newaxis, :]
+
+  qgrid = np.dot(ugrid, raxes)
+  return qgrid
+
+
+def rpa_dv(axes, rs, kf=None, fsk=None, nx=32):
+  """ calculate potential finite size error assuming RPA S(k)
+
+  Args:
+    raxes (np.array): reciprocal space lattice
+    rs (float): Wigner-Seitz radius i.e. density parameter
+  Return:
+    float: potential finite size correction
+  """
+  ndim = len(axes)
+  if kf is None:
+    kf = heg_kfermi(rs)
+  if fsk is None:
+    def fsk(k):
+      return gaskell_rpa_sk(k, rs, kf, ndim=ndim)
+  def fvk(k):
+    nm1 = ndim-1
+    return 2*nm1*np.pi/k**nm1
+  # reciprocel cell
+  volume = abs(np.linalg.det(axes))
+  intnorm = 1./volume
+  # sum
+  raxes = 2*np.pi*np.linalg.inv(axes).T
+  qgrid = mp_grid(raxes, nx)
+  qmags = np.linalg.norm(qgrid, axis=1)
+  val = 0.5*np.dot(fvk(qmags), fsk(qmags))/nx**ndim
+  dvlr = intnorm*val
+  return dvlr
+
+
+def rpa_dt(axes, rs, kf=None, nx=32):
+  """ calculate kinetic finite size error assuming RPA U(k) and S(k)
+
+  Args:
+    raxes (np.array): reciprocal space lattice
+    rs (float): Wigner-Seitz radius i.e. density parameter
+  Return:
+    float: kinetic finite size correction
+  """
+  from qharv.inspect import axes_pos
+
+  density = (4*np.pi/3*rs**3.)**(-1)
+
+  # get RPA U(k) and S(k)
+  if kf is None:
+    kf = heg_kfermi(rs)
+
+  fuk = lambda k:gaskell_rpa_uk(k, rs, kf)
+  fsk = effective_fsk_from_fuk(fuk, rs)
+
+  # setup integration grid
+  raxes = axes_pos.raxes(axes)
+  qgrid = mp_grid(raxes, nx)
+
+  # perform quadrature
+  #  weights
+  rvol = axes_pos.volume(raxes)
+  intnorm = 1./(2*np.pi)**3* rvol/nx**3* density
+  #  sum
+  qmags = np.linalg.norm(qgrid, axis=1)
+  integrand = lambda k:0.5*k**2*fuk(k)**2*fsk(k)
+  dtlr = intnorm* integrand(qmags).sum()
+  return dtlr
+
+# ================ routines for spherical average  ================
+
+
+def get_regular_grid_dimensions(gvecs):
+  gmin = gvecs.min(axis=0)
+  gmax = gvecs.max(axis=0)
+  ng = np.around(gmax-gmin+1).astype(int)
+  return gmin, gmax, ng
+
+
+def get_regular_grid(gmin, gmax, ng, dtype):
+  grid_gvecs_iter = product(
+    np.linspace(gmin[0], gmax[0], ng[0]),
+    np.linspace(gmin[1], gmax[1], ng[1]),
+    np.linspace(gmin[2], gmax[2], ng[2]),
+  )
+  rgvecs = np.array([spos for spos in grid_gvecs_iter],
+    dtype=dtype)
+  return rgvecs
+
+
+def get_index3d(gvec, gmin, dg):
+  idx3d = np.around( (gvec - gmin)/dg )
+  return idx3d.astype(int)
+
+
+def fill_regular_grid(gvecs, skm, fill_value=np.nan):
+  """ Fill a regular grid with given scalar field (gvecs, skm).
+  gvecs should fill (at least parts of) a structured grid consiting of
+  congruent rectangular parallelepipeds. By default, missing points are
+  filled with np.nan. User may construct a boolean selector for the
+  missing points, then go through and fill them.
+
+  Example:
+    kvecs, skm, ske = read_sofk('sofk.dat')  # read S(k) in Cartesian units
+    gvecs = np.dot(kvecs, np.linalg.inv(raxes))  # convert to lattice units
+    rgvecs, rskm = fill_regular_grid(gvecs, skm)
+
+    # set S(0) to 0
+    zsel = (np.linalg.norm(rgvecs, axis=1) == 0).reshape(rskm.shape)
+    rskm[zsel] = 0
+
+    # fill k>kc with max( S(k) )
+    msel = np.isnan(skm)
+    rskm[msel] = skm.max()
+
+  Args:
+    gvecs (np.array): reciprocal space points in lattice units
+    skm (np.array): S(k) at gvecs
+    fill_value (float, optiona): default is np.nan
+  Return:
+    tuple: (gvecs, rgrid), regular grid basis (gvecs) and values (rgrid).
+  """
+  gdtype = gvecs.dtype
+  sdtype = skm.dtype
+
+  ndim = gvecs.shape[1]
+  if ndim != 3:
+    raise RuntimeError('need to generalize to %d dimensions' % ndim)
+  gmin, gmax, ng = get_regular_grid_dimensions(gvecs)
+  dg = (gmax-gmin)/(ng-1)
+
+  # construct grid points
+  rgvecs = get_regular_grid(gmin, gmax, ng, dtype=gdtype)
+
+  # initialize regular grid
+  rgrid = np.empty(ng, dtype=sdtype)
+  filled = np.zeros(ng, dtype=bool)  # keep track of filled grid points
+  rgrid.fill(fill_value)
+
+  # fill regular grid
+  for gvec, sk in zip(gvecs, skm):
+    idx3d = get_index3d(gvec, gmin, dg)
+    rgrid[tuple(idx3d)] = sk
+    filled[tuple(idx3d)] = True
+
+  # check that data points did not overlap
+  nfill = len(filled[filled])
+  if nfill != len(skm):
+    raise RuntimeError('%d/%d input data retained' % (nfill, len(skm)))
+  return rgvecs, rgrid
+
+
+def get_skgrid(kvecs, dskm, raxes):
+  """ example usage of fill_regular_grid for S(k)
+
+  Args:
+    kvecs (np.array): reciprocal space vectors with S(k) data
+    dskm (np.array): S(k) data
+    raxes (np.array): reciprocal space lattice
+  Return:
+    tuple: (rkvecs, rdskm), kvectors and S(k) on regular grid
+  """
+
+  # get a regular grid in lattice units
+  gvecs = np.dot(kvecs, np.linalg.inv(raxes))
+  rgvecs, rdskm = fill_regular_grid(gvecs, dskm)
+  rdskm = rdskm.flatten()
+
+  # fill S(0)
+  zsel = (np.linalg.norm(rgvecs, axis=1)==0)
+  rdskm[zsel] = 0
+
+  # fill S(k>kc)
+  msel = np.isnan(rdskm)
+  rdskm[msel] = dskm.max()
+
+  # convert back to Cartesian coordinate
+  rkvecs = np.dot(rgvecs, raxes)
+  return rkvecs, rdskm
+
+
+# ================ routines to analyze spherical average  ================
+
+
+def get_hess_mat(hess):
+  """ construct hessian matrix stored in upper-triangular form
+
+  Args:
+    hess (array-like): 6-element array storing unique hessian matrix elements
+  Return:
+    np.array: hmat, the hessian matrix
+  """
+  hxx, hyy, hzz, hxy, hxz, hyz = hess
+  hmat = np.zeros([3, 3])
+  # diagnoal
+  hmat[0][0] = hxx
+  hmat[1][1] = hyy
+  hmat[2][2] = hzz
+  # off-diagnoal
+  hmat[0][1] = hxy
+  hmat[0][2] = hxz
+  hmat[1][2] = hyz
+  #hmat = 0.5*(hmat+hmat.T)
+  hmat[1][0] = hxy
+  hmat[2][0] = hxz
+  hmat[2][1] = hyz
+  return hmat
+
+# ================ routines for free fermion determinant  ================
+
+
+def freec(iorb, midx):
+  """ PW coefficients for the ith free fermion orbital
+  e.g. freec(0, np.argsort(kmags))
+  see usage in get_free_cmat
+
+  Args:
+    iorb (int): orbital index
+    midx (np.array): the list of indices that sort the kvectors
+  Return:
+    np.array: PW coefficients
+  """
+  ci = np.zeros(len(midx))
+  ci[midx[iorb]] = 1.0
+  return ci
+
+
+def get_free_cmat(norb, gvecs, raxes=np.eye(3)):
+  """ get coefficient matrix for ground state of norb fermions in gvecs PWs
+
+  Args:
+    norb (int): number of occupied orbitals (= # of fermions)
+    gvecs (np.array): PW basis as integer vectors (i.e. in rec. lat. basis)
+    raxes (np.array): reciprocal lattice vectors
+  Return:
+    np.array: cmat, coefficient matrix (norb, npw)
+  """
+  npw = len(gvecs)
+  kvecs = np.dot(gvecs, raxes)
+  kmags = np.linalg.norm(kvecs, axis=1)
+  midx = np.argsort(kmags)
+  cmat = np.zeros([norb, npw])
+  for iorb in range(norb):
+    cmat[iorb, :] = freec(iorb, midx)
+  return cmat
+
+
+def get_gvecs(nsh):
+  """ get nsh shells of gvectors
+
+  Args:
+    nsh (int): number of shells to get
+  Return:
+    np.array: gvectors in units of reciprocal lattice
+  """
+  gvecs = cubic_pos(2*nsh+1)
+  com = gvecs.mean(axis=0)
+  gvecs -= com.astype(int)
+  return gvecs
+
+
+# ================ routines for any determinant in PW basis  ================
+
+
+def select_from_rgrid(gvecs, gmin, ng):
+  """ select a subset of integer vectors from a regular grid
+  Example:
+    idx = select_from_rgrid(gvecs0, rgvecs)
+    assert np.allclose(gvecs0, rgvecs[idx])
+
+  Args:
+    gvecs  (np.array): subset of integer vectors
+    gmin (np.array): regular grid minima along each dimension
+    ng (np.array): regular grid size along each dimension
+  Return:
+    np.array: a list of indices
+  """
+  idx3d = (gvecs-gmin).T
+  idx3d = np.around(idx3d).astype(int)
+  idx = np.ravel_multi_index(idx3d, ng)
+  return idx
+
+
+def select(gvecs0, gvecs):
+  """ select a subset of gvectors (gvecs0) from the full set gvecs
+  Example:
+    sel = select(gvecs0, gvecs)
+    assert np.allclose(gvecs0, gvecs[sel])
+
+  Args:
+    gvecs0 (np.array): subset of integer vectors
+    gvecs (np.array): full set of integer vectors
+  Return:
+    np.array: a list of indices
+  """
+  gmin, gmax, ng = get_regular_grid_dimensions(gvecs)
+  idx0 = select_from_rgrid(gvecs0, gmin, ng)
+  idx = select_from_rgrid(gvecs, gmin, ng)
+  myidx = np.zeros(len(idx0), dtype=int)
+  for label, i in enumerate(idx0):
+    j = np.where(idx==i)[0][0]
+    myidx[label] = j
+  return myidx
+
+
+def get_mijq(gvecs, cmat, gvecs0, gvecs_regular=False):
+  """ calculate 1RDMs needed to construct S(k)
+
+  Args:
+    gvecs (np.array): integer vectors specifying the PW basis
+    cmat (np.array): orbital coefficients as rows (norb, npw)
+    gvecs0 (np.array): requested momentum vectors
+    gvecs_regular (bool, optional): gvecs fill a regular grid, default False
+  Return:
+    np.array: mijq (nq, norb*norb)
+  """
+  dtype = cmat.dtype
+  norb, npw = cmat.shape
+  if npw != len(gvecs):
+    raise RuntimeError('wrong basis for coefficient matrix')
+
+  sel_func = select
+  if gvecs_regular:
+    sel_func = select_from_rgrid
+
+  # select unshifted grid
+  idx0 = sel_func(gvecs0, gvecs)
+
+  mijq = np.zeros([len(gvecs0), norb*norb], dtype=dtype)
+  # for each qvec, select a shifted grid
+  for iq, qvec in enumerate(gvecs0):
+    # !!!! idx and idx0 should be determined for each qvec !!!!
+    idx = sel_func(gvecs0+qvec, gvecs)
+    mij = np.zeros([norb, norb], dtype=dtype)
+    for iorb in range(norb):
+      for jorb in range(norb):
+        mij[iorb][jorb] = np.dot(cmat[iorb, idx0].conj(), cmat[jorb, idx])
+    mijq[iq, :] = mij.ravel()
+  return mijq
+
+
+def get_sk(mijq):
+  """ calculate structure factor from a list of 1RDMs in PW basis
+  must reshape mijq into a list of matrices instead of a list of vectors
+  Example:
+    mijq = get_mijq(gvecs, cmat, gvecs0)
+    norb, npw = cmat.shape
+    ng = len(gvecs0)
+    skm0 = get_sk(mijq.reshape(ng, norb, norb))
+
+    ax.plot(np.linalg.norm(gvecs0, axis=1), skm0, 'x')
+
+  Args:
+    mijq (np.array): 1-body reduced density matrices, having shape (nq, no, no)
+  Return:
+    np.array: static structure factor, one at each qvec
+  """
+  nq, norb1, norb2 = mijq.shape
+  if norb1 != norb2:
+    raise RuntimeError('mij is not a square matrix')
+  norb = norb1
+  skm0 = []
+  for iq in range(len(mijq)):
+    mij = mijq[iq].reshape(norb, norb)
+    msum = np.diag(mij).sum()
+    term1 = (msum.conj()*msum).real
+    term2 = (mij.conj()*mij).sum().real
+    skval = 1.+(term1-term2)/norb
+    skm0.append(skval)
+  return np.array(skm0)
+
+def get_free_sk(gvecs0, raxes, norb):
+  """ calculate structure factor of free fermions
+
+  Args:
+    gvecs0 (np.array): integer vectors specifying PW basis in rec. lat. units
+    raxes (np.array): reciprocal lattice
+    norb (int): number of occupied orbitals
+  Return:
+    np.array: static structure factor, one at each gvec
+  """
+  gmin, gmax, ng = get_regular_grid_dimensions(gvecs0)
+  nsh = ng.max()
+  gvecs = get_gvecs(nsh)
+  cmat = get_free_cmat(norb, gvecs, raxes=raxes)
+  mijq = get_mijq(gvecs, cmat, gvecs0)
+  nq = len(gvecs0)
+  skm = get_sk(mijq.reshape(nq, norb, norb))
+  return skm
+
+def get_idx1d(gvecs, gmin, ng):
+  idx3d = (gvecs-gmin).T
+  idx1d = np.ravel_multi_index(idx3d, ng)
+  return idx1d
+
+def get_ridx(gvecs):
+  gmin, gmax, ng = get_regular_grid_dimensions(gvecs)
+  idx1d = get_idx1d(gvecs, gmin, ng)
+  igvecs = np.arange(len(gvecs))
+  ridx = -np.ones(np.prod(ng), dtype=int)
+  ridx[idx1d] = igvecs
+  return ridx
+
+def argsort_gvectors(gvecs):
+  gmin, gmax, ng = get_regular_grid_dimensions(gvecs)
+  idx1d = get_idx1d(gvecs, gmin, ng)
+  idx = np.argsort(idx1d)
+  return idx
+
+def align_gvectors(gvecs0, gvecs1):
+  # obtain a regular grid, which is large enough to hold both sets
+  gmin0, gmax0, ng0 = get_regular_grid_dimensions(gvecs0)
+  gmin1, gmax1, ng1 = get_regular_grid_dimensions(gvecs1)
+  gmin = np.min([gmin0, gmin1], axis=0)
+  gmax = np.max([gmax0, gmax1], axis=0)
+  ng = gmax-gmin+1
+  # put both sets on the same regular grid
+  idx1d0 = get_idx1d(gvecs0, gmin, ng)
+  idx1d1 = get_idx1d(gvecs1, gmin, ng)
+
+  # get indices for mutual kvectors
+  inter1d, comm0, comm1 =  np.intersect1d(idx1d0, idx1d1, return_indices=True)
+  return comm0, comm1
+
+def align_kvectors(kvecs0, kvecs1, raxes):
+  """ extract and sort the mutual kvectors between two sets
+
+  Args:
+    kvecs0 (np.array): first set of kvectors, shape (nk0, ndim)
+    kvecs1 (np.array): second set of kvectors, shape (nk1, ndim)
+    raxes (np.array): reciprocal lattice, shape (ndim, ndim)
+  Return:
+    (np.array, np.array): (comm0, comm1), indices for the common kvectors
+  """
+  # obtain integer vectors
+  inv_raxes = np.linalg.inv(raxes)
+  gvecs0 = np.round(np.dot(kvecs0, inv_raxes)).astype(int)
+  gvecs1 = np.round(np.dot(kvecs1, inv_raxes)).astype(int)
+  comm0, comm1 = align_gvectors(gvecs0, gvecs1)
+  return comm0, comm1
+
+def calc_detsk(qvecs, raxes, gvecs, cmat, frac, verbose):
+  """ Calculate S(k) from Kohn-Sham determinant
+
+  Args:
+    qvecs (np.array): integer array of shape (nq, ndim)
+    raxes (np.array): reciprocal lattice vectors
+    cmat (np.array): complex array of shape (norb, npw)
+    frac (float): fraction of PW cutoff
+    verbose (bool): output progress
+  Return:
+    np.array: sk0
+  """
+  # decide PW cutoff
+  kvecs = np.dot(gvecs, raxes)
+  kmags = np.linalg.norm(kvecs, axis=-1)
+  ecut = max(kmags)*frac
+  # reduce max ecut because kvecs may not be spherical
+
+  nq = len(qvecs)
+  norb, npw = cmat.shape
+
+  if verbose:
+    import progressbar
+    bar = progressbar.ProgressBar(max_value=nq)
+
+  mij = np.zeros([norb, norb], dtype=complex)
+  skm = np.zeros(nq)
+  for iq, qvec in enumerate(qvecs):
+    if verbose: bar.update(iq)
+    # step 1: calculate mij at q
+    # get largest gvector grid that can be shifted
+    kvecs1 = np.dot(gvecs+qvec, raxes)
+    kmags1 = np.linalg.norm(kvecs1, axis=-1)
+    gsel0 = kmags1 < ecut
+    gvecs0 = gvecs[gsel0]
+    # get shifted grid
+    gvecs1 = gvecs0+qvec
+    # get aligned indices of un-shifted and shifted grids
+    idx0 = select(gvecs0, gvecs)
+    idx1 = select(gvecs1, gvecs)
+    # construct mij
+    for iorb, jorb in product(range(norb), repeat=2):
+      mij[iorb][jorb] = np.dot(
+        cmat[iorb, idx0].conj(),
+        cmat[jorb, idx1]
+      )
+
+    # step 2: calculate Sq
+    msum = np.diag(mij).sum()
+    term1 = (msum.conj()*msum).real
+    term2 = (mij.conj()*mij).sum().real
+    skval = 1.+(term1-term2)/norb
+    skm[iq] = skval
+  # end for
+  return skm
+
+def trial_uk(uk, doc):
+  usrk = calc_usrk(uk, doc)
+  ulrk = calc_ulrk(doc)
+  # total usr + ulr
+  usrk[:len(ulrk)] += ulrk
+  return usrk
+
+def calc_ulrk(doc):
+  kcoef = doc.find('.//coefficients[@id="jk2"]')
+  kcorr = kcoef.getparent()
+  jktext = kcoef.text.replace('\n', ' ')
+  ulrk = -xml.text2arr(jktext)
+  return ulrk
+
+def calc_usrk(uk, doc):
+  from qharv.seed import xml
+  from qharv.inspect import axes_pos
+  axes = xml.get_axes(doc)
+  rcut = axes_pos.rwsc(axes)
+  fusr = get_fusr(doc, rcut)
+  usrk = evaluate_ft(uk, fusr, rcut)
+  return usrk
+
+def get_usrk(uk, fxml):
+  """Get short-range part of trial Jastrow pair potential."""
+  from qharv.seed import xml
+  doc = xml.read(fxml)
+  return calc_uksr(uk, doc)
+
+def calc_ulrk(doc):
+  from qharv.seed import xml
+  jnode = doc.find('.//jastrow[@type="kSpace"]')
+  cnode = jnode.find('.//correlation[@type="Two-Body"]').find('.//coefficients')
+  ulrk = xml.text2arr(cnode.text.replace('\n', ''))
+  return -ulrk
+
+def get_ulrk(uk, fxml):
+  """Get long-range part of trial Jastrow pair potential."""
+  from qharv.seed import xml
+  doc = xml.read(fxml)
+  return calc_ulrk(doc)
+
+def rpa_ur_coeff(xr, rs, rcut, same):
+  rho = 3./(4*np.pi*rs**3)
+  wp = np.sqrt(4*np.pi*rho)
+  alpha = np.sqrt(wp)
+  if same:
+    alpha /= np.sqrt(2)
+  damper = np.exp(-(2.*xr/rcut)**2)
+  urpa = 1./(2*wp*xr)*(1.-np.exp(-alpha*xr))
+  return urpa*damper
+
+def get_rpa_coeff(rs, rcut, nr, epsr=0.01):
+  dr = rcut/nr
+  xr = epsr + dr*np.arange(nr)
+  uuc = rpa_ur_coeff(xr, rs, rcut, True)
+  udc = rpa_ur_coeff(xr, rs, rcut, False)
+  return uuc, udc
+
+def rpa_jur(rs, rcut, nr, **kwargs):
+  uuc, udc = get_rpa_coeff(rs, rcut, nr, **kwargs)
+  juu = bspline(uuc, -0.25, rcut)
+  jud = bspline(udc, -0.5, rcut)
+  return juu, jud
+
+def heg_jas(rs, axes, nr, nsh0=5, kc=None, zoom=1e10):
+  # note zoom of 1e10 keeps 10 digits when grouping kshells
+  #  probably too high of a resolution, but this is QMCPACK default
+  kf = heg_kfermi(rs)  # assume unpolarized
+  if kc is None:
+    kc = kf
+  from qharv.inspect import axes_pos
+  rcut = axes_pos.rwsc(axes)
+  # step 1: build short-range Jastrow
+  uuc, udc = get_rpa_coeff(rs, rcut, nr)
+  j2sr = fusr(rcut, uuc, udc)
+  # step 2: find unique kmags
+  raxes = axes_pos.raxes(axes)
+  kvecs = get_kshells(nsh0, raxes)
+  kmags = np.linalg.norm(kvecs, axis=-1)
+  sel = (0<kmags) & (kmags<kc)
+  import static_correlation as sc
+  #ukmags = np.unique(kmags[sel])  # no tolerance option
+  kmags1 = kmags[sel]
+  sels = sc.kshell_sels(kmags1, zoom)
+  ukmags = np.array([kmags1[s].mean() for s in sels])
+  # step 3: get Ulr
+  urpa = gaskell_rpa_uk(ukmags, rs, kf)
+  usrk = evaluate_ft(ukmags, j2sr, rcut)
+  ulrk = usrk-urpa
+  return ukmags, ulrk, uuc, udc
+
+def get_gc_kvecs(twist, raxes, kf, nsh0):
+  kvecs = get_kshells(nsh0, raxes)
+  # add twist
+  gvecs = np.around(np.dot(kvecs, np.linalg.inv(raxes)))
+  gvecs += twist
+  kvecs = np.dot(gvecs, raxes)
+  # enforce Fermi surface
+  kmags = np.linalg.norm(kvecs, axis=-1)
+  sel = kmags < kf
+  kvecs1 = kvecs[sel]
+  kmags1 = kmags[sel]
+  # sort kvectors
+  idx = np.argsort(kmags1)
+  return kvecs1[idx]
+
+def get_norb(twist, raxes, kf, nsh0=10):
+  kvecs = get_kvecs(twist, raxes, kf, nsh0)
+  kmags = np.linalg.norm(kvecs, axis=-1)
+  nup = len(kmags)
+  return nup
+
+class IsotropicMomentumDistributionFSC:
+  def __init__(self, rs, fsk=None, ndim=3):
+    self._ndim = ndim
+    self._rs = rs
+    self._kf = heg_kfermi(rs, ndim=ndim)
+    self._rho = charge_density(rs, ndim=ndim)
+    self._init_fsc = False
+    if fsk is None:  # use Gaskell RPA S(k) if no model S(k) is given
+      self._fsk = self.gaskell_fsk
+    else:
+      print('using user-defined S(k)')
+      self._fsk = fsk
+  def gaskell_fsk(self, k):
+    return gaskell_rpa_sk(k, self._rs, self._kf, ndim=self._ndim)
+  def delta(self, k):
+    sk = self._fsk(k)
+    uk = sk2uk(k, sk, self._rs, ndim=self._ndim)
+    return uk*(1-sk)-self._rho*uk**2*sk
+  def rpa_delta(self, k):
+    assert self._ndim == 3
+    wp = (3./self._rs**3)**0.5
+    alpha = 4*np.pi/wp
+    beta = alpha/wp
+    return 0.5*(alpha/k**2-beta)
+  def init_missing_qvecs(self, raxes, mx):
+    """Assume cubic cell, get integration grid within missing volume"""
+    from qharv.inspect.axes_pos import volume, cubic_pos
+    fvecs = 1./mx*cubic_pos(mx, ndim=self._ndim)
+    qvecs = np.dot(fvecs, raxes)
+    qvecs -= qvecs.mean(axis=0)
+    self._intnorm = volume(raxes)/mx**self._ndim/(2*np.pi)**self._ndim
+    self._qvecs = qvecs
+    self._init_fsc = True
+    return qvecs
+  def choose_kvecs(self, nx, zoom=100.):
+    """Choose grid to evaluate n(k) on """
+    from qharv.inspect.axes_pos import cubic_pos
+    kvecs = 2*self._kf/nx*cubic_pos(nx, ndim=self._ndim)
+    # choose one point from each kshell
+    kmags = np.linalg.norm(kvecs, axis=-1)
+    import static_correlation as sc
+    sels = sc.kshell_sels(kmags, zoom)
+    kidx = []
+    for sel in sels:
+      idx = np.where(sel)[0][0]
+      kidx.append(idx)
+    return kvecs[kidx]
+  def evaluate_fsc(self, fnk, kvecs, fnk_is_3d=False):
+    if not self._init_fsc:
+      raise RuntimeError('must initialize first')
+    qmags = np.linalg.norm(self._qvecs, axis=-1)
+    if fnk_is_3d:
+      fnk1 = fnk
+    else:
+      def fnk1(kvecs):
+        kmags = np.linalg.norm(kvecs, axis=-1)
+        return fnk(kmags)
+    def nkfsc(kvec):
+      dnkval = fnk1(self._qvecs+kvec[np.newaxis, :]) - \
+               fnk1(kvec[np.newaxis, :])
+      intval = self._intnorm*(self.delta(qmags)*dnkval).sum()
+      return intval
+    dnk = [nkfsc(kvec) for kvec in kvecs]
+    return dnk
+  def evaluate_fsc_sum(self, fnk, kvecs, raxes, kmax,
+    nsh=4, nbig=4, show_progress=True, extrap=True, alpha=None):
+    nk, ndim = kvecs.shape
+    assert ndim == self._ndim
+    def fnk1(kvecs):
+      kmags = np.linalg.norm(kvecs, axis=-1)
+      return fnk(kmags)
+    dnk = []
+    if extrap:
+      from qharv.sieve.scalar_df import poly_extrap_to_x0
+      from qharv.inspect import axes_pos
+      vol0 = (2*np.pi)**3/axes_pos.volume(raxes)
+      vol1 = vol0*nbig**3
+    if show_progress:
+      from progressbar import ProgressBar
+      bar = ProgressBar(maxval=nk)
+    for ik, kvec in enumerate(kvecs):
+      def dnk1(qvecs):
+        qmags = np.linalg.norm(qvecs, axis=-1)
+        dnkval = fnk1(qvecs+kvec[np.newaxis, :]) -\
+                 fnk1(kvec[np.newaxis, :])
+        delta = self.delta(qmags)
+        return delta*dnkval
+      # do sum in small cell
+      nk0 = evaluate_ksum(dnk1, raxes, kmax, nsh)
+      # redo sum in big cell
+      nk1 = evaluate_ksum(dnk1, raxes/nbig, kmax, nsh*nbig)
+      if extrap:
+        if alpha is None:
+          if ndim == 3:
+            alpha = -1./3
+          elif ndim == 2:
+            alpha = -1./4
+          else:
+            raise RuntimeError('unknown dimension %d' % ndim)
+        myx = [vol0**alpha, vol1**alpha]
+        myym = [nk0, nk1]
+        myye = [1e-6, 1e-6]
+        dnk1, dnk1e = poly_extrap_to_x0(myx, myym, myye, 1)
+      else:
+        dnk1 = nk1-nk0
+      dnk.append(dnk1)
+      bar.update(ik)
+    return np.array(dnk)
+
+def calc_nk1d_fsc(uk, unkm, nelec, rs=3.25, mx=8):
+  from qharv.inspect import axes_pos
+  from solith.li_nofk.expt_jofp import flip_and_clamp
+  from solith.dft_calc.bcc_crystal import get_cubic_axes
+  from chiesa_correction import IsotropicMomentumDistributionFSC
+  axes = get_cubic_axes(rs, nelec)
+  raxes = axes_pos.raxes(axes)
+  fsc = IsotropicMomentumDistributionFSC(rs)
+  fsc.init_missing_qvecs(raxes, mx)
+  fnk = flip_and_clamp(uk, unkm, kind='linear')
+  kvs = np.array([[k, 0, 0] for k in uk])
+  dnk_fsc = fsc.evaluate_fsc(fnk, kvs)
+  return np.array(dnk_fsc)
+
+def ewald_vklr(xk, alpha):
+  x = xk/(2.*alpha)
+  return 4*np.pi/x**2*np.exp(-x**2)
+
+def evaluate_ksum(fy, raxes, kmax, nsh):
+  from qharv.inspect import axes_pos
+  rvol = axes_pos.volume(raxes)
+  sumnorm = rvol/(2*np.pi)**3
+  # get kvectors within cutoff
+  kvecs = get_kshells(nsh, raxes)
+  kmags = np.linalg.norm(kvecs, axis=-1)
+  sel = (1e-4<kmags) & (kmags<kmax)
+  kvecs = kvecs[sel]
+  kmags = kmags[sel]
+  # evaluate function on kvectors
+  yvals = fy(kvecs)
+  sumval = sumnorm*np.sum(yvals)
+  return sumval
+
+def evaluate_ksum1d(fy1d, raxes, kcut, kmax, dk):
+  from qharv.inspect import axes_pos
+  rvol = axes_pos.volume(raxes)
+  kmags = np.arange(kcut, kmax, dk)
+  sumnorm = (4*np.pi*kmags**2*dk)*rvol/(2*np.pi)**3
+  yvals = fy1d(kmags)*sumnorm
+  sumval = np.sum(yvals)
+  return sumval

@@ -40,3 +40,13 @@ Thumbs.db
 #activate this after publishing
 CITATION.cff
 LICENSE
+
+# Simulation runs and snakemake metadata (never track)
+runs/
+.snakemake/
+slurm-*.out
+
+# Vim swap files
+*.swp
+*.swo
+*.swn
