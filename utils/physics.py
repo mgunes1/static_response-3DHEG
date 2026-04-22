@@ -96,18 +96,34 @@ def get_shell_points(shell_number):
 # ---------------------------------------------------------------------------
 
 
-def guess_alpha2(rs, Ne, qidx):
+def guess_alpha2(rs, nelec, qidx):
+    A, B, C = 1.69387154, 0.15297875, 0.94657354
+    kf = (9 * np.pi / 4) ** (1 / 3) / rs  # 3D gas
+    alat = (nelec * 4 * np.pi / 3) ** (1.0 / 3) * rs
+    blat = 2 * np.pi / alat
+    qvec = blat * np.array(qidx)
+    qmag = np.linalg.norm(qvec)
+    alpha = (
+        (B * A ** (-1) + 1) / (B + A * np.exp(-C * (qmag / kf) ** 2)) - A ** (-1)
+    ) * B
+    return alpha
+
+
+def gguess_alpha2(rs, Ne, qidx):
     """
     Estimate optimal perturbation scaling alpha via a logistic-like function
     of (q / kF)².
     """
     a = 1.2
+    A = 50
     kf = (9 * np.pi / 4) ** (1 / 3) / rs
     alat = (Ne * 4 * np.pi / 3) ** (1 / 3) * rs
     blat = 2 * np.pi / alat
     qvec = blat * np.array(qidx)
     qmag = np.linalg.norm(qvec)
-    return 2 / (1 + np.exp(-a * (qmag / kf) ** 2)) - 1
+    # alpha = (A ** (-1) + 1) / (1 + A * np.exp(-2 * (qmag / kf) ** 2)) - A ** (-1)
+    alpha = 2 / (1 + np.exp(-a * (qmag / kf) ** 2)) - 1
+    return alpha
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +287,7 @@ def G_Moroni(rs, q):
     C = np.pi / (2 * k_F) * (-diff_rse)
 
     a1, a2, b1, b2 = 2.15, 0.435, 1.57, 0.409
-    n = 4 if rs == 10 else 8
+    n = 4 if rs >= 10 else 8
     x = rs**0.5
     B = (1 + a1 * x + a2 * x**3) / (3 + b1 * x + b2 * x**3)
 
@@ -335,6 +351,32 @@ def get_chi_corradini(rs, Ne, qlist):
 # ---------------------------------------------------------------------------
 # Finite-size correction
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Analytical alpha (fitted trial-WF prefactor)
+# ---------------------------------------------------------------------------
+
+
+def q_over_kf(rs, Ne, qidx):
+    """q/kF for cubic box; rs-independent."""
+    rs = float(rs)
+    Ne = int(Ne)
+    q_mag = np.linalg.norm(qidx)
+    L = (4 * np.pi / 3 * rs**3 * Ne) ** (1 / 3)
+    kF = (9 * np.pi / 4) ** (1 / 3) / rs
+    q_norm = 2 * np.pi / L * q_mag
+
+    return q_norm / kF
+
+
+def get_alpha(q_over_kF, rs):
+    """Analytical fit to optimal alpha/vq from v5.0 scan (Moroni 1995 range)."""
+    A0, a = 1.92757669, -0.60504965
+    B0, b = 1.16030916, 0.30130412
+    A = A0 * float(rs) ** a
+    B = B0 * float(rs) ** b
+    return 1 - np.exp(-A * float(q_over_kF) ** B)
 
 
 def FS_correct(chiq, correction, rs, Ne, dft_func=None):
