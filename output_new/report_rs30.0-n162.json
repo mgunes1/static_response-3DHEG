@@ -1,0 +1,163 @@
+{
+  "rs": 30.0,
+  "Ne": 162,
+  "qidx_list": [
+    [
+      1,
+      0,
+      0
+    ],
+    [
+      1,
+      1,
+      1
+    ],
+    [
+      2,
+      1,
+      0
+    ],
+    [
+      2,
+      2,
+      0
+    ],
+    [
+      3,
+      0,
+      0
+    ],
+    [
+      3,
+      1,
+      1
+    ],
+    [
+      3,
+      2,
+      0
+    ],
+    [
+      4,
+      0,
+      0
+    ],
+    [
+      4,
+      1,
+      0
+    ],
+    [
+      4,
+      1,
+      1
+    ],
+    [
+      4,
+      2,
+      0
+    ],
+    [
+      3,
+      3,
+      2
+    ],
+    [
+      4,
+      3,
+      0
+    ],
+    [
+      3,
+      3,
+      3
+    ],
+    [
+      4,
+      4,
+      0
+    ],
+    [
+      4,
+      3,
+      3
+    ],
+    [
+      4,
+      4,
+      3
+    ],
+    [
+      5,
+      5,
+      1
+    ],
+    [
+      5,
+      5,
+      2
+    ],
+    [
+      5,
+      5,
+      3
+    ],
+    [
+      5,
+      5,
+      4
+    ],
+    [
+      5,
+      5,
+      5
+    ],
+    [
+      6,
+      6,
+      6
+    ],
+    [
+      7,
+      7,
+      7
+    ],
+    [
+      8,
+      8,
+      8
+    ]
+  ],
+  "vq_list": [
+    0.0,
+    0.0003,
+    0.0004,
+    0.0005,
+    0.0006,
+    0.0007,
+    0.0008,
+    0.0009
+  ],
+  "dft_func": "ni",
+  "tpmult": 15.625,
+  "nwalker": 1024,
+  "ecut_pre": 125,
+  "wf": "sj",
+  "git_hash": "05b2097e8edcd8c8566db92dc3db600d62e3d86b",
+  "qmc_block": {
+    "blocks_between_recompute": "10",
+    "blocks": "400",
+    "warmupsteps": "200",
+    "timestep": "0.75",
+    "subSteps": "3",
+    "steps": "84",
+    "target_walkers": "1024",
+    "_xml": "<qmc method=\"dmc\" move=\"pbyp\" checkpoint=\"-1\">\n    <parameter name=\"blocks_between_recompute\"> 10 </parameter>\n    <parameter name=\"blocks\"> 400 </parameter>\n    <parameter name=\"warmupsteps\">   200 </parameter>\n    <parameter name=\"timestep\"> 0.75 </parameter>\n    <parameter name=\"subSteps\"> 3 </parameter>\n    <parameter name=\"steps\"> 84 </parameter>\n    <parameter name=\"target_walkers\"> 1024 </parameter>\n  </qmc>\n"
+  },
+  "jastrow_block": {
+    "type": "Two-Body",
+    "name": "J2",
+    "function": "Bspline",
+    "_xml": "<jastrow name=\"J2\" type=\"Two-Body\" function=\"Bspline\">\n        <correlation speciesA=\"u\" speciesB=\"u\" size=\"8\">\n          <coefficients id=\"uu\" type=\"Array\" optimize=\"yes\"> 8.473858459 3.242772894 1.867242725 1.001032591 0.5522919782 0.3041796289 0.1598000407 0.09442464207</coefficients>\n        </correlation>\n        <correlation speciesA=\"u\" speciesB=\"d\" size=\"8\">\n          <coefficients id=\"ud\" type=\"Array\" optimize=\"yes\"> 8.202216353 3.640936448 1.979064404 0.9945069672 0.5432475248 0.3051224987 0.1581479162 0.09326191591</coefficients>\n        </correlation>\n      </jastrow>\n    "
+  }
+}

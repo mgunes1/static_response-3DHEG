@@ -9,6 +9,7 @@ import os
 import re
 import warnings
 import xml.etree.ElementTree as ET
+from glob import glob
 
 import numpy as np
 
@@ -160,7 +161,7 @@ def collect_q_and_vq(runs_path, rs, n):
     """
     try:
         data = np.load(
-            runs_path + "/output/E_QMC_rs{:.1f}-n{:d}.npz".format(rs, n),
+            _cache_path_old(rs, n, pwscf=False),
             allow_pickle=True,
         )
         qidx_list = [list(q) for q in data["qlist"]]
@@ -216,6 +217,8 @@ def _build_h5_path(main_dir, rs, Ne, q, vq, pwscf=False):
     """Construct the path to a stat.h5 file for given run parameters."""
     from .physics import guess_alpha2
 
+    print("WRONG ALPHAAAAA CHECK")
+
     alpha = guess_alpha2(rs, Ne, q)
     ecut_pre, wf, dft_func, ts, ss, nw, tpmult = qmc_params_default(rs, Ne)
     if rs > 29:
@@ -228,13 +231,23 @@ def _build_h5_path(main_dir, rs, Ne, q, vq, pwscf=False):
                 f"scf/qeout"
             )
         else:
-            return (
-                f"{main_dir}/rs{rs:.1f}-n{Ne:d}/"
+            pattern = (
+                f"{main_dir}"
                 f"qv{q[0]:d}_{q[1]:d}_{q[2]:d}-vq{vq:.5f}/"
-                f"{dft_func}-e{ecut_pre}-qa{alpha:.3f}-thr1.0d-10/"
-                f"{wf}-t{tpmult * Ne * rs}-ts{ts:.4f}-nw{nw}/"
-                f"qmc.s00{ss}.stat.h5"
+                f"*-qa*-thr1.0d-10/"
+                f"sj*/"
+                f"qmc.s002.stat.h5"
             )
+
+            matches = glob.glob(pattern)
+
+            if len(matches) == 0:
+                raise FileNotFoundError(f"No match for pattern:\n{pattern}")
+            elif len(matches) > 1:
+                raise RuntimeError(f"Multiple matches found:\n{matches}")
+
+            path = matches[0]
+            return path
     else:
         if pwscf:
             thr = 10
@@ -245,13 +258,23 @@ def _build_h5_path(main_dir, rs, Ne, q, vq, pwscf=False):
                 f"scf/qeout"
             )
         else:
-            return (
-                f"{main_dir}/rs{rs:.1f}-n{Ne:d}/"
-                f"qv{q[0]:d}_{q[1]:d}_{q[2]:d}-vq{vq:.4f}/"
-                f"{dft_func}-e{ecut_pre}-qa{alpha:.3f}-thr1.0d-10/"
-                f"{wf}-t{tpmult * Ne * rs}-ts{ts:.4f}-nw{nw}/"
-                f"qmc.s00{ss}.stat.h5"
+            pattern = (
+                f"{main_dir}"
+                f"qv{q[0]:d}_{q[1]:d}_{q[2]:d}-vq{vq:.5f}/"
+                f"*-qa*-thr1.0d-10/"
+                f"sj*/"
+                f"qmc.s002.stat.h5"
             )
+
+            matches = glob.glob(pattern)
+
+            if len(matches) == 0:
+                raise FileNotFoundError(f"No match for pattern:\n{pattern}")
+            elif len(matches) > 1:
+                raise RuntimeError(f"Multiple matches found:\n{matches}")
+
+            path = matches[0]
+            return path
 
 
 def get_variance_for_run(main_dir, rs, Ne, q, vq, nequil=50):
@@ -272,14 +295,17 @@ def get_variance_for_run(main_dir, rs, Ne, q, vq, nequil=50):
 # ---------------------------------------------------------------------------
 # E_all caching
 # ---------------------------------------------------------------------------
-
-
-def _cache_path(rs, Ne, pwscf=False):
+def _cache_path_old(rs, Ne, pwscf=False):
     """Return the file path for the cached E_all."""
     if pwscf:
         return f"./output/E_DFT_rs{rs:.1f}-n{Ne:d}.npz"
     else:
         return f"./output/E_QMC_rs{rs:.1f}-n{Ne:d}.npz"
+
+
+def _cache_path(rs, Ne, pwscf=False):
+    """Return the file path for the cached E_all."""
+    return f"./output_new/E_all_rs{rs:.1f}-n{Ne:d}.npz"
 
 
 def _subset_E(E_full, dE_full, full_qlist, full_vqlist, req_qlist, req_vqlist):
@@ -293,7 +319,6 @@ def _subset_E(E_full, dE_full, full_qlist, full_vqlist, req_qlist, req_vqlist):
     """
     full_vqlist = np.asarray(full_vqlist, dtype=float)
     req_vqlist = np.asarray(req_vqlist, dtype=float)
-
     q_lookup = {tuple(q): i for i, q in enumerate(full_qlist)}
     q_idx = []
     for q in req_qlist:
@@ -306,10 +331,9 @@ def _subset_E(E_full, dE_full, full_qlist, full_vqlist, req_qlist, req_vqlist):
     for vq in req_vqlist:
         diffs = np.abs(full_vqlist - vq)
         best = np.argmin(diffs)
-        if diffs[best] > 1e-8:
-            return None
+        # if diffs[best] > 1e-8:
+        # return None
         vq_idx.append(best)
-
     return E_full[np.ix_(q_idx, vq_idx)], dE_full[np.ix_(q_idx, vq_idx)]
 
 
@@ -371,6 +395,53 @@ def get_E_all(main_dir, rs, Ne):
     return E_all, dE_all, qidx_list, vq_list
 
 
+def load_energies(main_dir, rs, Ne, qidx_list, vq_list, pwscf=False):
+    """
+    Load E_all and dE_all for the requested (qidx_list, vq_list) subset.
+
+    Uses cache if available and matching; otherwise rebuilds.
+
+    Returns
+    -------
+    E_sub : ndarray (n_q_req, n_v_req)
+    dE_sub : ndarray (n_q_req, n_v_req)
+    """
+    cache = _cache_path(rs, Ne)
+    if os.path.exists(cache):
+        data = np.load(cache, allow_pickle=True)
+
+        full_qlist = [list(q) for q in data["qlist"]]
+        if pwscf:
+            result = _subset_E(
+                data["E_dft_all"],
+                np.zeros_like(data["E_dft_all"]) + 1e-12,
+                full_qlist,
+                data["vqlist"],
+                qidx_list,
+                vq_list,
+            )
+        else:
+            result = _subset_E(
+                data["E_dmc_all"],
+                data["dE_dmc_all"],
+                full_qlist,
+                data["vqlist"],
+                qidx_list,
+                vq_list,
+            )
+        if result is not None:
+            print(
+                f"  [cache hit] loaded {len(qidx_list)} q × "
+                f"{len(vq_list)} vq from {cache}"
+            )
+            return result
+        else:
+            raise ValueError(
+                f"Requested q/vq not found in directory tree at {main_dir}. "
+                f"Available q: {full_qlist}, available vq: {list(data['vqlist'])}"
+            )
+
+
 def load_or_compute_E(main_dir, rs, Ne, qidx_list, vq_list, pwscf=False):
     """
     Return E_all and dE_all for the requested (qidx_list, vq_list) subset.
@@ -411,6 +482,7 @@ def load_or_compute_E(main_dir, rs, Ne, qidx_list, vq_list, pwscf=False):
                 f"({stored_dir} → {main_dir}) — rebuilding"
             )
             full_qlist = [list(q) for q in data["qlist"]]
+
             result = _subset_E(
                 data["E_all"],
                 data["dE_all"],
@@ -447,3 +519,20 @@ def load_or_compute_E(main_dir, rs, Ne, qidx_list, vq_list, pwscf=False):
             f"Available q: {full_qlist}, available vq: {list(data['vqlist'])}"
         )
     return result
+
+
+def save_chi(save_dir, qlist, chi, dchi, rs, Ne, fq):
+    np.savez(
+        save_dir + f"/chi_rs{rs}_n{Ne}.npz",
+        qlist=qlist,
+        chi=chi,
+        dchi=dchi,
+        fq=fq,
+        rs=rs,
+        Ne=Ne,
+    )
+
+
+def load_chi(save_dir, rs, Ne):
+    data = np.load(save_dir + f"/chi_rs{rs}_n{Ne}.npz", allow_pickle=True)
+    return data["qlist"], data["chi"], data["dchi"], data["fq"]

@@ -1,0 +1,127 @@
+{
+  "rs": 60.0,
+  "Ne": 162,
+  "qidx_list": [
+    [
+      1,
+      0,
+      0
+    ],
+    [
+      1,
+      1,
+      1
+    ],
+    [
+      2,
+      1,
+      0
+    ],
+    [
+      2,
+      2,
+      0
+    ],
+    [
+      3,
+      0,
+      0
+    ],
+    [
+      3,
+      1,
+      1
+    ],
+    [
+      3,
+      2,
+      0
+    ],
+    [
+      4,
+      0,
+      0
+    ],
+    [
+      4,
+      1,
+      0
+    ],
+    [
+      4,
+      1,
+      1
+    ],
+    [
+      4,
+      2,
+      0
+    ],
+    [
+      3,
+      3,
+      2
+    ],
+    [
+      4,
+      3,
+      0
+    ],
+    [
+      3,
+      3,
+      3
+    ],
+    [
+      4,
+      4,
+      0
+    ],
+    [
+      4,
+      3,
+      3
+    ],
+    [
+      4,
+      4,
+      3
+    ],
+    [
+      5,
+      5,
+      4
+    ]
+  ],
+  "vq_list": [
+    0.0,
+    6e-05,
+    0.00012,
+    0.00018,
+    0.00027,
+    0.00036,
+    0.00045
+  ],
+  "dft_func": "ni",
+  "tpmult": 15.625,
+  "nwalker": 1024,
+  "ecut_pre": 125,
+  "wf": "sj",
+  "git_hash": "05b2097e8edcd8c8566db92dc3db600d62e3d86b",
+  "qmc_block": {
+    "blocks_between_recompute": "10",
+    "blocks": "400",
+    "warmupsteps": "200",
+    "timestep": "1.5",
+    "subSteps": "3",
+    "steps": "84",
+    "target_walkers": "1024",
+    "_xml": "<qmc method=\"dmc\" move=\"pbyp\" checkpoint=\"-1\">\n    <parameter name=\"blocks_between_recompute\"> 10 </parameter>\n    <parameter name=\"blocks\"> 400 </parameter>\n    <parameter name=\"warmupsteps\">   200 </parameter>\n    <parameter name=\"timestep\"> 1.5 </parameter>\n    <parameter name=\"subSteps\"> 3 </parameter>\n    <parameter name=\"steps\"> 84 </parameter>\n    <parameter name=\"target_walkers\"> 1024 </parameter>\n  </qmc>\n"
+  },
+  "jastrow_block": {
+    "type": "Two-Body",
+    "name": "J2",
+    "function": "Bspline",
+    "_xml": "<jastrow name=\"J2\" type=\"Two-Body\" function=\"Bspline\">\n        <correlation speciesA=\"u\" speciesB=\"u\" size=\"8\">\n          <coefficients id=\"uu\" type=\"Array\" optimize=\"yes\"> 14.24911892 5.449480611 2.819274816 1.553283326 0.9138083483 0.5634584853 0.3007393559 0.3152899128</coefficients>\n        </correlation>\n        <correlation speciesA=\"u\" speciesB=\"d\" size=\"8\">\n          <coefficients id=\"ud\" type=\"Array\" optimize=\"yes\"> 14.21141804 5.565871374 2.910875005 1.536856278 0.909637214 0.5646608547 0.2989840346 0.3142299233</coefficients>\n        </correlation>\n      </jastrow>\n    "
+  }
+}

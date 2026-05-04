@@ -1,6 +1,5 @@
 # Local postprocessing notebooks
-low-q.ipynb
-fitting_G.ipynb
+*.ipynb
 
 # Virtual environments
 .venv/
@@ -25,6 +24,10 @@ build/
 
 # Figures (generated outputs — reproduce from notebook)
 Figures/
+output/
+alpha_opt/
+*.pdf
+*.png
 
 # Old/backup versions
 backup/
@@ -33,6 +36,7 @@ context.md
 # Large QMC raw data files
 *.h5
 *.hdf5
+
 
 # OS
 .DS_Store

@@ -124,6 +124,7 @@ def plot_E_of_vq(
     ax=None,
     fit_line="r",
     pwscf=False,
+    vq_fit="quadratic",
     **kwargs,
 ):
     """
@@ -140,6 +141,7 @@ def plot_E_of_vq(
     """
     from scipy.optimize import curve_fit
 
+    from utils.fitting import _fit_func
     from utils.io_utils import load_or_compute_E
 
     from .physics import (
@@ -169,24 +171,20 @@ def plot_E_of_vq(
     dE_arr = np.array(*dE_list)
     vq_arr = np.array(vq_list)
 
-    def quartic(x, A, B):
-        return E_arr[0] + A * x**2 + B * x**4
-
-    def quadratic(x, A):
-        return E_arr[0] + A * x**2
+    func = _fit_func(vq_fit)
 
     if pwscf:
         popt, _ = curve_fit(
-            quadratic, vq_arr * alpha, E_arr, sigma=dE_arr, absolute_sigma=True
+            func, vq_arr * alpha, E_arr, sigma=dE_arr, absolute_sigma=True
         )
     else:
-        popt, _ = curve_fit(quadratic, vq_arr, E_arr, sigma=dE_arr, absolute_sigma=True)
+        popt, _ = curve_fit(func, vq_arr, E_arr, sigma=dE_arr, absolute_sigma=True)
 
     # Plot
     if pwscf:
         finex = np.linspace(vq_arr[0] * alpha, vq_arr[-1] * alpha)
         ax.plot(finex, E_arr[0] + anal_chi02(rs, Ne, [q]) / n0 * finex**2, "k")
-        ax.plot(finex, E_arr[0] + popt[0] * finex**2, fit_line)
+        ax.plot(finex, func(finex, *popt), fit_line)
         ax.errorbar(
             vq_arr * alpha, E_arr, yerr=dE_arr, linestyle="", alpha=0.7, color="black"
         )
@@ -207,7 +205,7 @@ def plot_E_of_vq(
         ax.set_xlabel(r"$\alpha$")
     else:
         finex = np.linspace(vq_arr[0], vq_arr[-1])
-        ax.plot(finex, E_arr[0] + popt[0] * finex**2, fit_line)
+        ax.plot(finex, func(finex, *popt), fit_line)
         ax.plot(
             finex,
             E_arr[0] + get_chi_Moroni(rs, Ne, get_qs([q], Ne, rs)) / n0 * finex**2,

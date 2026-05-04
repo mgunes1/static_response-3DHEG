@@ -96,18 +96,73 @@ def get_shell_points(shell_number):
 # ---------------------------------------------------------------------------
 
 
-def guess_alpha2(rs, Ne, qidx):
+def q_over_kf(rs, Ne, qidx):
+    """q/kF for cubic box; rs-independent."""
+    rs = float(rs)
+    Ne = int(Ne)
+    q_mag = np.linalg.norm(qidx)
+    L = (4 * np.pi / 3 * rs**3 * Ne) ** (1 / 3)
+    kF = (9 * np.pi / 4) ** (1 / 3) / rs
+    q_norm = 2 * np.pi / L * q_mag
+
+    return q_norm / kF
+
+
+def get_alpha(qidx, rs, Ne):
+    """Analytical fit to optimal alpha/vq from v5.0 scan (Moroni 1995 range)."""
+    A0, a = 1.92757669, -0.60504965
+    B0, b = 1.16030916, 0.30130412
+    A = A0 * float(rs) ** a
+    B = B0 * float(rs) ** b
+
+    q_over_kF = q_over_kf(rs, Ne, qidx)
+    return 1 - np.exp(-A * float(q_over_kF) ** B)
+
+
+def guess_alpha2(rs, nelec, qidx):
     """
-    Estimate optimal perturbation scaling alpha via a logistic-like function
-    of (q / kF)².
+    Guess alpha based on a simple hyperbolic tangent function.
+    Usage range: rs = 0-5
     """
-    a = 1.2
-    kf = (9 * np.pi / 4) ** (1 / 3) / rs
-    alat = (Ne * 4 * np.pi / 3) ** (1 / 3) * rs
+    kf = (9 * np.pi / 4) ** (1 / 3) / rs  # 3D gas
+    alat = (nelec * 4 * np.pi / 3) ** (1.0 / 3) * rs
     blat = 2 * np.pi / alat
     qvec = blat * np.array(qidx)
     qmag = np.linalg.norm(qvec)
-    return 2 / (1 + np.exp(-a * (qmag / kf) ** 2)) - 1
+    alpha = np.tanh(qmag / kf)
+    return alpha
+
+
+def guess_alpha1(rs, nelec, qidx):
+    """
+    Guess alpha based on a sigmoid function.
+    Usage range: rs = 5-50 (needs to be tested more thoroughly)
+    """
+    a = 1.2
+    kf = (9 * np.pi / 4) ** (1 / 3) / rs  # 3D gas
+    alat = (nelec * 4 * np.pi / 3) ** (1.0 / 3) * rs
+    blat = 2 * np.pi / alat
+    qvec = blat * np.array(qidx)
+    qmag = np.linalg.norm(qvec)
+    alpha = 2 / (1 + np.exp(-a * (qmag / kf) ** 2)) - 1
+    return alpha
+
+
+def guess_alpha2x(rs, nelec, qidx):
+    """
+    Guess alpha based on a sigmoid function.
+    Usage range: rs > 50 (needs to be tested more thoroughly)
+    """
+    A, B, C = 1.69387154, 0.15297875, 0.94657354
+    kf = (9 * np.pi / 4) ** (1 / 3) / rs  # 3D gas
+    alat = (nelec * 4 * np.pi / 3) ** (1.0 / 3) * rs
+    blat = 2 * np.pi / alat
+    qvec = blat * np.array(qidx)
+    qmag = np.linalg.norm(qvec)
+    alpha = (
+        (B * A ** (-1) + 1) / (B + A * np.exp(-C * (qmag / kf) ** 2)) - A ** (-1)
+    ) * B
+    return alpha
 
 
 # ---------------------------------------------------------------------------
@@ -168,159 +223,17 @@ def anal_chi02(rs, Ne, qidx_list):
 
 
 # ---------------------------------------------------------------------------
-# Ceperley-Alder correlation derivatives (used by G_Moroni & corradini)
-# ---------------------------------------------------------------------------
-
-
-def diffv_cep(r_s):
-    """d(r_s * epsilon_c) / d(r_s)  for the Ceperley-Alder parametrization."""
-    gamma = -0.1423
-    beta1 = 1.0529
-    beta2 = 0.3334
-    denom = (beta1 * np.sqrt(r_s) + beta2 * r_s + 1) ** 2
-    return beta1 * gamma * np.sqrt(r_s) / (2 * denom) + gamma / denom
-
-
-def diffvc(rho):
-    """d(mu_c) / d(n_0)  (correlation chemical-potential derivative)."""
-    third = 1.0 / 3.0
-    a = 0.0311
-    c = 0.0020
-    d = -0.0116
-    gamma = -0.1423
-    beta1 = 1.0529
-    beta2 = 0.3334
-
-    r_s = (3.0 / (4.0 * np.pi * rho)) ** third
-
-    stor1 = (1.0 + beta1 * np.sqrt(r_s) + beta2 * r_s) ** (-3.0)
-    stor2 = (
-        -0.41666667 * beta1 * (r_s ** (-0.5))
-        - 0.5833333 * (beta1**2)
-        - 0.66666667 * beta2
-    )
-    stor3 = -1.75 * beta1 * beta2 * np.sqrt(r_s) - 1.3333333 * r_s * (beta2**2)
-    reshigh = gamma * stor1 * (stor2 + stor3)
-    reslow = a / r_s + 0.66666667 * (c * np.log(r_s) + d) + 0.33333333 * c
-
-    reshigh = reshigh * (-4.0 * np.pi / 9.0) * (r_s**4)
-    reslow = reslow * (-4.0 * np.pi / 9.0) * (r_s**4)
-
-    filterlow = r_s < 1
-    filterhigh = r_s >= 1
-    return reslow * filterlow + reshigh * filterhigh
-
-
-def fxc_lda_scalar(rs):
-    """
-    Full LDA f_xc (exchange + correlation, scalar-relativistic)
-    for a single rs value.
-    """
-    a = 0.0311
-    c = 0.0020
-    d = -0.0116
-    gamma = -0.1423
-    beta1 = 1.0529
-    beta2 = 0.3334
-    rho = 4 * np.pi / 3 * rs**3
-
-    if rs >= 1:
-        stor1 = (1.0 + beta1 * np.sqrt(rs) + beta2 * rs) ** (-3.0)
-        stor2 = (
-            -0.41666667 * beta1 * (rs ** (-0.5))
-            - 0.5833333 * (beta1**2)
-            - 0.66666667 * beta2
-        )
-        stor3 = -1.75 * beta1 * beta2 * np.sqrt(rs) - 1.3333333 * rs * (beta2**2)
-        dvc = gamma * stor1 * (stor2 + stor3)
-    else:
-        dvc = a / rs + 0.66666667 * (c * np.log(rs) + d) + 0.33333333 * c
-
-    dvc = dvc * (-4.0 * np.pi / 9.0) * (rs**4)
-
-    vxnr = -((3 * rho / np.pi) ** (1 / 3))
-    b = 0.0140 / rs
-    rel = -0.5 + 1.5 * np.log(b + np.sqrt(1.0 + b * b)) / (b * np.sqrt(1.0 + b * b))
-    bb = b * b
-    bb1 = 1.0 + bb
-    difrel = (1.5 / (b * bb1)) - 1.5 * np.log(b + np.sqrt(bb1)) * (1.0 + 2.0 * bb) * (
-        bb1 ** (-1.5)
-    ) / bb
-    difrel = difrel * (-0.0140) / (rs * rs)
-    dvx = (0.610887057 / (rs * rs)) * rel + vxnr * difrel
-    dvx = dvx * (-4.0 * np.pi / 9.0) * (rs**4)
-    return dvc + dvx
-
-
-# ---------------------------------------------------------------------------
 # Local field factors
 # ---------------------------------------------------------------------------
 
 
-def get_fxc_from_chi(rs, Ne, qidx_list, chi):
-    """Extract f_xc(q) from chi(q) via the relation chi = chi0 / (1 - chi0 * (Vc + fxc))."""
-    ql = get_qs(qidx_list, Ne, rs)
-    Vc = 4 * np.pi / ql**2
-    chi0 = anal_chi02(rs, Ne, qidx_list)
-    fxc = 1 / chi0 - 1 / chi - Vc
-    return fxc
-
-
-# chi_RPA = chi0 / (1 - chi0 *Vc)
-# 1/chi_RPA = 1/chi0 - Vc
 def get_G_from_chi(rs, Ne, qidx_list, chi):
     """Extract G(q) from chi(q) via the relation chi = chi0 / (1 - chi0 * (Vc + fxc))."""
     ql = get_qs(qidx_list, Ne, rs)
     Vc = 4 * np.pi / ql**2
-    fxc = get_fxc_from_chi(rs, Ne, qidx_list, chi)
-    G = -fxc / Vc  # 1 + (1 / chi - 1 / chi0)/Vc
+    chi0 = chi0q(ql, Ne, rs)
+    G = 1 + (1 / chi - 1 / chi0) / Vc
     return G
-
-
-def G_Moroni(rs, q):
-    """Moroni et al. local field factor G(q)."""
-    q = q + 1e-18
-    rho_avg = 1.0 / (rs**3 * 4 * np.pi / 3)
-    k_F = (3 * np.pi**2 * rho_avg) ** (1 / 3)
-    Q = q / k_F
-
-    diff_mu = diffvc(rho_avg)
-    A = 1 / 4 - (k_F**2) / (4 * np.pi) * diff_mu
-
-    diff_rse = diffv_cep(rs)
-    C = np.pi / (2 * k_F) * (-diff_rse)
-
-    a1, a2, b1, b2 = 2.15, 0.435, 1.57, 0.409
-    n = 4 if rs >= 10 else 8
-    x = rs**0.5
-    B = (1 + a1 * x + a2 * x**3) / (3 + b1 * x + b2 * x**3)
-
-    G = (((A - C) ** (-n) + (Q**2 / B) ** n) ** (-1 / n) + C) * Q**2
-    return G
-
-
-def corradini_pz(rs, q):
-    """Corradini–Perdew-Zunger f_xc(q) in atomic units."""
-    q = q + 1e-18
-    rho_avg = 1.0 / (rs**3 * 4 * np.pi / 3)
-    k_F = (3 * np.pi**2 * rho_avg) ** (1 / 3)
-    Q = q / k_F
-
-    diff_mu = diffvc(rho_avg)
-    A = 1 / 4 - (k_F**2) / (4 * np.pi) * diff_mu
-
-    diff_rse = diffv_cep(rs)
-    C = np.pi / (2 * k_F) * (-diff_rse)
-
-    a1, a2, b1, b2 = 2.15, 0.435, 1.57, 0.409
-    x = rs**0.5
-    B = (1 + a1 * x + a2 * x**3) / (3 + b1 * x + b2 * x**3)
-
-    g = B / (A - C)
-    alpha = 1.5 / (rs**0.25) * A / (B * g)
-    beta = 1.2 / (B * g)
-    Gcor = C * Q**2 + (B * Q**2) / (g + Q**2) + alpha * Q**4 * np.exp(-beta * Q**2)
-    return -4 * np.pi / q**2 * Gcor
 
 
 # ---------------------------------------------------------------------------
@@ -328,11 +241,13 @@ def corradini_pz(rs, q):
 # ---------------------------------------------------------------------------
 
 
-def get_chi_Moroni(rs, Ne, qlist):
+def get_chi_Moroni(rs, Ne, qlist, n=None):
     """Compute chi(q) using Moroni G(q) local field factor."""
+    from .fitting_G import G_Moroni
+
     Vc = 4 * np.pi / qlist**2
     chi0 = chi0q(qlist, Ne, rs)
-    G = G_Moroni(rs, qlist)
+    G = G_Moroni(rs, qlist, n=n)
     fxc = -Vc * G
     return chi0 / (1 - chi0 * (Vc + fxc))
 
@@ -346,9 +261,31 @@ def get_chi_RPA(rs, Ne, qlist):
 
 def get_chi_corradini(rs, Ne, qlist):
     """Compute chi(q) using Corradini f_xc(q)."""
+    from .fitting_G import G_Corradini
+
     Vc = 4 * np.pi / qlist**2
     chi0 = chi0q(qlist, Ne, rs)
-    fxc = corradini_pz(rs, qlist)
+    fxc = -Vc * G_Corradini(rs, qlist)
+    return chi0 / (1 - chi0 * (Vc + fxc))
+
+
+def get_chi_gunes(rs, Ne, qlist):
+    """Compute chi(q) using gunes f_xc(q)."""
+    from .fitting_G import G_mhg
+
+    Vc = 4 * np.pi / qlist**2
+    chi0 = chi0q(qlist, Ne, rs)
+    fxc = -Vc * G_mhg(rs, qlist)
+    return chi0 / (1 - chi0 * (Vc + fxc))
+
+
+def get_chi_kaplan(rs, Ne, qlist):
+    """Compute chi(q) using Kaplan f_xc(q)."""
+    from .fitting_G import G_Kaplan
+
+    Vc = 4 * np.pi / qlist**2
+    chi0 = chi0q(qlist, Ne, rs)
+    fxc = -Vc * G_Kaplan(rs, qlist)
     return chi0 / (1 - chi0 * (Vc + fxc))
 
 

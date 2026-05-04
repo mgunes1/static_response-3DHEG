@@ -8,7 +8,7 @@ finite-size corrected pipeline (get_chi), and vq-range analysis.
 import numpy as np
 from scipy.optimize import curve_fit
 
-from utils.io_utils import load_or_compute_E
+from utils.io_utils import load_energies, load_or_compute_E
 from utils.physics import anal_chi02, get_gas_params, get_qs
 
 # ---------------------------------------------------------------------------
@@ -22,7 +22,14 @@ def _fit_func(vq_fit):
 
     Options: 'quadratic' -> E0 + A*x^2
              'quartic'   -> E0 + A*x^2 + B*x^4
+             'sixth'     -> E0 + A*x^2 + B*x^4 + C*x^6
     """
+
+    def eighth(x, A, B, C, D, e0):
+        return e0 + A * x**2 + B * x**4 + C * x**6 + D * x**8
+
+    def sixth(x, A, B, C, e0):
+        return e0 + A * x**2 + B * x**4 + C * x**6
 
     def quartic(x, A, B, e0):
         return e0 + A * x**2 + B * x**4
@@ -30,12 +37,17 @@ def _fit_func(vq_fit):
     def quadratic(x, A, e0):
         return e0 + A * x**2
 
-    funcs = {"quartic": quartic, "quadratic": quadratic}
+    funcs = {
+        "eighth": eighth,
+        "sixth": sixth,
+        "quartic": quartic,
+        "quadratic": quadratic,
+    }
     try:
         return funcs[vq_fit]
     except KeyError:
         raise ValueError(
-            f"Invalid fit type '{vq_fit}'. Choose 'quartic' or 'quadratic'."
+            f"Invalid fit type '{vq_fit}'. Choose 'eighth', 'sixth', 'quartic' or 'quadratic'."
         )
 
 
@@ -78,7 +90,15 @@ def fit_quality_report(
     """
     fit_quality = []
     func = _fit_func(vq_fit)
-    n_params = 3 if vq_fit == "quartic" else 2
+    n_params = (
+        5
+        if vq_fit == "eighth"
+        else 4
+        if vq_fit == "sixth"
+        else 3
+        if vq_fit == "quartic"
+        else 2
+    )
 
     for iq, q in enumerate(qidx_list):
         E_arr = E_all[iq, :]
@@ -160,11 +180,12 @@ def get_chi0_q(
     chi_q : array   — DFT chi_0 for each q
     dchi_q : array  — (zeros — DFT has no stochastic error)
     """
-    from .io_utils import load_or_compute_E
-    from .physics import guess_alpha2
+    from .physics import get_alpha
 
     n0 = get_gas_params(rs, Ne)[1]
-    E_all, dE_all = load_or_compute_E(main_dir, rs, Ne, qidx_list, vq_list, pwscf=True)
+    E_all, dE_all = load_energies(
+        main_dir, rs, Ne, qidx_list, vq_list, pwscf=True
+    )  # load_or_compute_E(main_dir, rs, Ne, qidx_list, vq_list, pwscf=True)
 
     chi_q = np.zeros(len(qidx_list))
     dchi_q = np.zeros(len(qidx_list))
@@ -174,7 +195,7 @@ def get_chi0_q(
     func = _fit_func(vq_fit)
 
     for iq in range(len(qidx_list)):
-        alpha = guess_alpha2(rs, Ne, qidx_list[iq])
+        alpha = get_alpha(qidx_list[iq], rs, Ne)
         popt, pcov = fit_E_of_vq(
             E_all[iq], dE_all[iq], vq_arr, func, pwscf=True, alpha=alpha
         )
@@ -203,11 +224,12 @@ def get_chi_q(main_dir, Ne, rs, vq_list, qidx_list, verbose=False, vq_fit="quadr
     dchi_q : array
     fit_quality : list of dict
     """
-    from .io_utils import load_or_compute_E
     from .physics import get_gas_params
 
     n0 = get_gas_params(rs, Ne)[1]
-    E_all, dE_all = load_or_compute_E(main_dir, rs, Ne, qidx_list, vq_list)
+    E_all, dE_all = load_energies(
+        main_dir, rs, Ne, qidx_list, vq_list
+    )  # load_or_compute_E(main_dir, rs, Ne, qidx_list, vq_list)
 
     chi_q = np.zeros(len(qidx_list))
     dchi_q = np.zeros(len(qidx_list))
@@ -264,7 +286,7 @@ def get_correction(main_dir, qidxl, rs, Ne, vq_list, qidx_list):
     ql = get_qs(qidxl, Ne, rs)
     chi0_infty = chi0q(ql, Ne, rs)
     chi0_a = anal_chi02(rs, Ne, qidxl)
-    # chi00_q = get_chi0_q(main_dir, Ne, rs, vq_list, qidxl)[0]
+    chi00_q = get_chi0_q(main_dir, Ne, rs, vq_list[:5], qidxl)[0]
 
     return chi0_infty ** (-1) - chi0_a ** (-1)
 
@@ -283,6 +305,7 @@ def get_chi(
     bootstrap_method="parametric",
     vq_list_dft=None,
     qidx_list_dft=None,
+    no_FS_correction=False,
 ):
     """
     Full pipeline: fit E(vq) → extract chi → FS-correct → bootstrap errors.
@@ -334,6 +357,8 @@ def get_chi(
 
     correction = get_correction(main_dir, qidxl, rs, Ne, vq_list_dft, qidx_list_dft)
     chi_q_corr = FS_correct(chi_q, correction, rs, Ne, dft_func=dft_func)
+    if no_FS_correction:
+        chi_q_corr = chi_q
 
     # Bootstrap error
     kF, n0, NF, L = get_gas_params(rs, Ne)
@@ -449,118 +474,57 @@ def bootstrap_G_error(
     func = _fit_func(fit_type)
     G_boot = np.empty((n_boot, n_q))
     ql = get_qs(qidx_list, Ne, rs)
-    chi0 = anal_chi02(rs, Ne, qidx_list)
+    chi0 = anal_chi02(rs, Ne, qidx_list)  # chi0q(ql, Ne, rs)
     for b in range(n_boot):
         for iq in range(n_q):
             popt, _ = fit_E_of_vq(E_pert[b, iq], dE_all[iq], vq_arr, func)
             chi_boot = popt[0] * n0
             Vc = 4 * np.pi / ql[iq] ** 2
-            G_boot[b, iq] = 1 + (1 / chi_boot - 1 / chi0[iq]) / Vc
+            G_boot[b, iq] = 1 + (1 / chi_boot - 5 / chi0[iq]) / Vc
 
     boot_err = np.nanstd(G_boot, axis=0)
     return boot_err, G_boot
 
 
-# ---------------------------------------------------------------------------
-# vq-range analysis
-# ---------------------------------------------------------------------------
-
-
-def analyze_vq_range(
+def bootstrap_epsilon_error(
+    vq_arr,
+    n0,
     rs,
     Ne,
     qidx_list,
-    vq_max,
-    n_vq=7,
-    dE_typical=None,
-    chi_ref="Moroni",
-    snr_threshold=3.0,
-    verbose=True,
+    fit_type="quadratic",
+    n_boot=500,
+    seed=None,
 ):
     """
-    Pre-flight check: predict signal-to-noise for a proposed vq range
-    using a reference chi (Moroni or Corradini).
+    Parametric bootstrap for chi(q) error bars.
 
-    Returns a list of per-q dicts with keys: q, q_over_kF, chi_ref_over_n0,
-    delta_E, dE, snr, acceptable, vq_max_suggested.
+    Perturbs E_i → E_i + dE_i * N(0,1), refits, applies FS correction.
+
+    Returns
+    -------
+    boot_err : array (n_q,)
+    boot_samples : array (n_boot, n_q)
     """
-    from .physics import (
-        G_Moroni,
-        chi0q,
-        corradini_pz,
-        get_gas_params,
-        get_qs,
-    )
+    rng = np.random.default_rng(seed)
+    vq_arr = np.asarray(vq_arr, dtype=float)
+    n_v = len(vq_arr)
+    n_q = len(qidx_list)
 
-    kF, n0, NF, L = get_gas_params(rs, Ne)
+    E_all, dE_all = load_or_compute_E(".", rs, Ne, qidx_list, vq_arr)
+
+    noise = rng.standard_normal((n_boot, n_q, n_v))
+    E_pert = E_all[np.newaxis, :, :] + dE_all[np.newaxis, :, :] * noise
+
+    func = _fit_func(fit_type)
+    epsilon_boot = np.empty((n_boot, n_q))
     ql = get_qs(qidx_list, Ne, rs)
+    for b in range(n_boot):
+        for iq in range(n_q):
+            popt, _ = fit_E_of_vq(E_pert[b, iq], dE_all[iq], vq_arr, func)
+            chi_boot = popt[0] * n0
+            Vc = 4 * np.pi / ql[iq] ** 2
+            epsilon_boot[b, iq] = 1 + Vc * chi_boot
 
-    if chi_ref == "Moroni":
-        Vc = 4 * np.pi / ql**2
-        chi0 = chi0q(ql, Ne, rs)
-        G = G_Moroni(rs, ql)
-        chi_ref_vals = chi0 / (1 - chi0 * (Vc - Vc * G))
-    elif chi_ref == "Corradini":
-        Vc = 4 * np.pi / ql**2
-        chi0 = chi0q(ql, Ne, rs)
-        fxc = corradini_pz(rs, ql)
-        chi_ref_vals = chi0 / (1 - chi0 * (Vc + fxc))
-    else:
-        raise ValueError(f"Unknown chi_ref: {chi_ref}")
-
-    if dE_typical is None:
-        dE_typical = 5e-5 * rs
-
-    analysis = []
-    if verbose:
-        print(
-            f"{'q':>12s} {'q/kF':>6s} {'|chi/n0|':>10s} {'delta_E':>10s} "
-            f"{'dE':>10s} {'SNR':>6s} {'status':>12s} {'vq_max_sug':>12s}"
-        )
-        print("-" * 82)
-
-    for iq, q in enumerate(qidx_list):
-        chi_over_n0 = abs(chi_ref_vals[iq] / n0)
-        delta_E = chi_over_n0 * vq_max**2
-        snr = delta_E / dE_typical
-        acceptable = snr > snr_threshold
-
-        if not acceptable and chi_over_n0 > 0:
-            vq_max_sug = np.sqrt(snr_threshold * dE_typical / chi_over_n0)
-        else:
-            vq_max_sug = vq_max
-
-        info = {
-            "q": q,
-            "q_over_kF": ql[iq] / kF,
-            "chi_ref_over_n0": chi_over_n0,
-            "delta_E": delta_E,
-            "dE": dE_typical,
-            "snr": snr,
-            "acceptable": acceptable,
-            "vq_max_suggested": vq_max_sug,
-        }
-        analysis.append(info)
-
-        if verbose:
-            status = "OK" if acceptable else "TOO NOISY"
-            sug_str = f"{vq_max_sug:.6f}" if not acceptable else "---"
-            print(
-                f"  {str(q):>10s} {ql[iq] / kF:6.3f} {chi_over_n0:10.4e} "
-                f"{delta_E:10.4e} {dE_typical:10.4e} {snr:6.1f} "
-                f"{status:>12s} {sug_str:>12s}"
-            )
-
-    if verbose:
-        n_bad = sum(1 for a in analysis if not a["acceptable"])
-        print(
-            f"\n  Summary: {len(analysis) - n_bad}/{len(analysis)} q-points "
-            f"acceptable with vq_max={vq_max:.6f}, SNR threshold={snr_threshold}"
-        )
-        if n_bad > 0:
-            max_sug = max(
-                a["vq_max_suggested"] for a in analysis if not a["acceptable"]
-            )
-            print(f"  Suggested vq_max: {max_sug:.6f}")
-
-    return analysis
+    boot_err = np.nanstd(epsilon_boot, axis=0)
+    return boot_err, epsilon_boot
