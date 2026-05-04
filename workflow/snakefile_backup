@@ -55,45 +55,51 @@ def gen_qidx(mq):
 
 funcs = ['ni']
 
-vq_dict = {2: [0, 0.00300, 0.00600, 0.00900, 0.01200, 0.01600, 0.02000, 0.02800],
-           3: [0.02],
-           5: [0, 0.00200, 0.00400, 0.00600, 0.00800, 0.01000],
+vq_dict = {2: [0, 0.00600, 0.01200, 0.01600, 0.02000, 0.02800],
+           5: [0, 0.00300, 0.00600, 0.00900, 0.01200, 0.01500],
           10: [0, 0.00100, 0.00200, 0.00300, 0.00400, 0.00500],
-          15: [0, 0.00020, 0.00040, 0.00060, 0.00080, 0.00100,0.002,0.003], 
-          20: [0, 0.00020, 0.00040, 0.00060, 0.00080, 0.00100], #previously [0.    , 0.0001, 0.0002, 0.0003, 0.0004, 0.0005, 0.0006, 0.0007, 0.0008, 0.0009]
-          30: [0, 0.00030, 0.00040, 0.00050, 0.00060, 0.00070, 0.00080, 0.00090],
-          50: [0, 0.00005, 0.00010, 0.00015, 0.00020, 0.00025, 0.00030, 0.00040, 0.00050],
-          60: [0, 0.00006, 0.00012, 0.00018, 0.00027, 0.00036, 0.00045],
-          80: [0, 0.00005, 0.00010, 0.00015, 0.00020, 0.00025, 0.00030, 0.00035, 0.00040],
-          90: [0, 0.00005, 0.00010, 0.00015, 0.00020, 0.00025, 0.00030, 0.00035, 0.00040],
-          110: [0, 0.00004,0.00006, 0.00008, 0.00012, 0.00016, 0.00020, 0.00025, 0.00032, 0.00040, 0.0005,0.0006]
+          15: [0, 0.00060, 0.00120, 0.00180, 0.00240, 0.00300],
+          20: [0, 0.00050, 0.00100, 0.00150, 0.00200, 0.00250],
+          30: [0, 0.00030, 0.00060, 0.00090, 0.00120, 0.00150],
+          50: [0, 0.00010, 0.00020, 0.00030, 0.00040, 0.00050],
+          60: [0,6e-5,12e-5,18e-5,27e-5],
           }
 
 nelec = 162
-rsl = [110]
+rsl = [2]
+vql = vq_dict[rsl[0]]
 
-qidxl = gen_qidx(5)[::1] + [[5,5,1],[5,5,2],[5,5,3], [5,5,4], [5,5,5], [6,6,6], [7,7,7], [8,8,8]]  #[[5,5,4]]
+qidxl = gen_qidx(5)[::2]
 
 wf = 'sj'
 tpmult = 15.625
 nwalker = 1024
 
+rsl = ['%.1f' % rs for rs in rsl]
+vql = ['%.5f' % vq for vq in vql]
+
 # --- Targets ---
 targets = []
-for qidx in qidxl:
-    for rs in rsl:
-        rs_f = float(rs)
-        vql_rs = ['%.5f' % vq for vq in vq_dict[rs]]
-        ts = rs_f/(12*nelec**0.5) if wf == 'sjb' else rs_f/20
-        tproj = tpmult*nelec*rs_f
-        qmc_kws = dict(wf=wf, tproj=tproj, ts='%.4f' % ts, nwtot=nwalker)
-        t = expand(point_done_flag, allow_missing=False,
-            nelec=nelec, vq=vql_rs, func=funcs, epre=125,
-            qx=qidx[0], qy=qidx[1], qz=qidx[2],
-            rs='%.1f' % rs_f, **qmc_kws)
-        targets += t
 
-rsl_str = ['%.1f' % rs for rs in rsl]
+t1 = expand(point_done_flag, allow_missing=True,
+  wf=wf, nelec=nelec, vq=vql, func=funcs, epre=125
+)
+for qidx in qidxl:
+  t2 = expand(t1, allow_missing=True,
+    qx=qidx[0], qy=qidx[1], qz=qidx[2]
+  )
+  for rs in rsl:
+    rs = float(rs)
+    ts = rs/(12*nelec**0.5) if wf == 'sjb' else rs/20
+    tproj = tpmult*nelec*rs
+    qmc_kws = dict(
+      wf = wf,
+      tproj = tproj,
+      ts = '%.4f' % ts,
+      nwtot = nwalker,
+    )
+    t3 = expand(t2, allow_missing=False, rs=rs, **qmc_kws)
+    targets += t3
 
 nk2 = 6
 nproc = 96
@@ -106,7 +112,7 @@ cmds = dict(
 localrules: write_scf, run_scf, convertpw, write_opt, write_dmc, sdat, point_done, collect_data
 
 collect_targets = expand(
-  'output_new/E_all_rs{rs}-n{nelec}.npz', rs=rsl_str, nelec=[nelec])
+  'output_new/E_all_rs{rs}-n{nelec}.npz', rs=rsl, nelec=[nelec])
 
 rule all:
   input: targets + collect_targets
@@ -247,13 +253,12 @@ rule collect_data:
     rs_f     = float(wildcards.rs)
     Ne_i     = int(wildcards.nelec)
     rs_n_dir = 'runs/rs%s-n%s' % (wildcards.rs, wildcards.nelec)
-    vql_rs = vq_dict[int(float(wildcards.rs))]
 
     os.makedirs('output_new', exist_ok=True)
 
     collect_and_save(
       rs_n_dir=rs_n_dir, rs=rs_f, Ne=Ne_i,
-      qidxl=qidxl, vql=vql_rs,
+      qidxl=qidxl, vql=[float(v) for v in vql],
       outpath=output.data,
     )
 
@@ -272,7 +277,7 @@ rule collect_data:
     report = dict(
       rs=rs_f, Ne=Ne_i,
       qidx_list=[list(q) for q in qidxl],
-      vq_list=[float(v) for v in vql_rs],
+      vq_list=[float(v) for v in vql],
       dft_func=funcs[0],
       tpmult=tpmult,
       nwalker=nwalker,

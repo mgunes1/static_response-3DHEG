@@ -145,32 +145,41 @@ def get_chi0_q(
     ecut_pre=125,
     dft_func="ni",
     vq_fit="quadratic",
+    alpha_manifest=None,
 ):
     """
     Extract non-interacting chi_0(q) by fitting DFT (pwscf) energies
     vs vq for each q-point.
+
+    alpha_manifest : dict or None
+        If provided (from io_utils.load_alpha_manifest), the per-(q,vq) optimized
+        alpha is used for the vq*alpha x-axis scaling; otherwise falls back to
+        guess_alpha2 with a warning.
 
     Returns
     -------
     chi_q : array   — DFT chi_0 for each q
     dchi_q : array  — (zeros — DFT has no stochastic error)
     """
-    from .io_utils import _build_h5_path, get_energy_pwscf
-    from .physics import get_gas_params, guess_alpha2
+    from .io_utils import _build_h5_path, get_energy_pwscf, _alpha_for
+    from .physics import get_gas_params
 
     chi_q = np.zeros(len(qidx_list))
     dchi_q = np.zeros(len(qidx_list))
 
     for iq, q in enumerate(qidx_list):
         E_list = []
-        alpha = guess_alpha2(rs, Ne, q)
+        # Use per-vq alpha for the x-axis scaling so each point is self-consistent
+        alpha_list = [_alpha_for(alpha_manifest, rs, Ne, q, vq) for vq in vq_list]
         for vq in vq_list:
-            path = _build_h5_path(main_dir, rs, Ne, q, vq, pwscf=True)
+            path = _build_h5_path(main_dir, rs, Ne, q, vq, pwscf=True,
+                                  alpha_manifest=alpha_manifest)
             E = get_energy_pwscf(path)
             E_list.append(E / Ne)
 
         func = _fit_func(vq_fit)
-        popt, _ = curve_fit(func, np.array(vq_list) * alpha, E_list)
+        vq_eff = np.array(vq_list) * np.array(alpha_list)
+        popt, _ = curve_fit(func, vq_eff, E_list)
         n0 = get_gas_params(rs, Ne)[1]
         chi_q[iq] = popt[0] * n0
 
@@ -182,9 +191,13 @@ def get_chi0_q(
 # ---------------------------------------------------------------------------
 
 
-def get_chi_q(main_dir, Ne, rs, vq_list, qidx_list, verbose=False, vq_fit="quadratic"):
+def get_chi_q(main_dir, Ne, rs, vq_list, qidx_list, verbose=False, vq_fit="quadratic",
+              alpha_manifest=None):
     """
     Extract chi(q) from E(vq) fits using cached energies.
+
+    alpha_manifest : dict or None
+        If provided, passed to load_or_compute_E for manifest-aware path resolution.
 
     Returns
     -------
@@ -196,7 +209,8 @@ def get_chi_q(main_dir, Ne, rs, vq_list, qidx_list, verbose=False, vq_fit="quadr
     from .physics import get_gas_params
 
     n0 = get_gas_params(rs, Ne)[1]
-    E_all, dE_all = load_or_compute_E(main_dir, rs, Ne, qidx_list, vq_list)
+    E_all, dE_all = load_or_compute_E(main_dir, rs, Ne, qidx_list, vq_list,
+                                      alpha_manifest=alpha_manifest)
 
     chi_q = np.zeros(len(qidx_list))
     dchi_q = np.zeros(len(qidx_list))
@@ -271,6 +285,7 @@ def get_chi(
     bootstrap_method="parametric",
     vq_list_dft=None,
     qidx_list_dft=None,
+    alpha_manifest=None,
 ):
     """
     Full pipeline: fit E(vq) → extract chi → FS-correct → bootstrap errors.
@@ -296,6 +311,9 @@ def get_chi(
         'parametric' or 'block'.
     vq_list_dft, qidx_list_dft : list, optional
         vq / q lists for DFT chi0 (defaults to vql / qidxl).
+    alpha_manifest : dict or None
+        If provided (from io_utils.load_alpha_manifest), per-point optimized
+        alpha values are used for path resolution instead of guess_alpha2.
 
     Returns
     -------
@@ -318,6 +336,7 @@ def get_chi(
         qidxl,
         verbose=verbose,
         vq_fit=vq_fit,
+        alpha_manifest=alpha_manifest,
     )
 
     correction = get_correction(main_dir, qidxl, rs, Ne, vq_list_dft, qidx_list_dft)

@@ -372,11 +372,24 @@ def q_over_kf(rs, Ne, qidx):
 
 def get_alpha(q_over_kF, rs):
     """Analytical fit to optimal alpha/vq from v5.0 scan (Moroni 1995 range)."""
-    A0, a = 1.92757669, -0.60504965
-    B0, b = 1.16030916, 0.30130412
-    A = A0 * float(rs) ** a
-    B = B0 * float(rs) ** b
-    return 1 - np.exp(-A * float(q_over_kF) ** B)
+    # A0, a = 1.92757669, -0.60504965
+    # B0, b = 1.16030916, 0.30130412
+
+    if rs == 110 and np.round(q_over_kF, 2) == 2.17:
+        return 1.771
+    else:
+        if rs > 32:
+            A0 = 0.72757669
+            a = -0.60504965
+            B0 = 1.16030916
+            b = 0.35130412
+        else:
+            A0, a = 1.92757669, -0.60504965
+            B0, b = 1.16030916, 0.30130412
+
+        A = A0 * float(rs) ** a
+        B = B0 * float(rs) ** b
+        return 1 - np.exp(-A * (q_over_kF) ** B)
 
 
 def FS_correct(chiq, correction, rs, Ne, dft_func=None):

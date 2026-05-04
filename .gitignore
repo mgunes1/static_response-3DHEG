@@ -8,6 +8,12 @@ venv/
 # VS Code
 .vscode/
 vscode/
+.claude/
+./memory/
+*.code-workspace
+context.md
+CONTEXT.md
+CLAUDE.md
 #pp.code-workspace
 
 # Python cache
@@ -24,10 +30,16 @@ build/
 
 # Figures (generated outputs — reproduce from notebook)
 Figures/
+output/
+*.pdf
+*.png
+*.tex
+*.bib
 
 # Old/backup versions
 backup/
 context.md
+utils_old/
 
 # Large QMC raw data files
 *.h5
@@ -50,3 +62,4 @@ slurm-*.out
 *.swp
 *.swo
 *.swn
+runs

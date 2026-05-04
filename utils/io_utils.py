@@ -412,11 +412,11 @@ def get_variance_for_run(main_dir, rs, Ne, q, vq, nequil=50, alpha_manifest=None
 def _cache_path(rs, Ne, pwscf=False, vmc=False, prefix=""):
     """Return the file path for the cached E_all."""
     if pwscf:
-        return f"./output/{prefix}xE_DFT_rs{rs:.1f}-n{Ne:d}.npz"
+        return f"./output/{prefix}E2_DFT_rs{rs:.1f}-n{Ne:d}.npz"
     elif vmc:
-        return f"./output/{prefix}xE_VMC_rs{rs:.1f}-n{Ne:d}.npz"
+        return f"./output/{prefix}E2_VMC_rs{rs:.1f}-n{Ne:d}.npz"
     else:
-        return f"./output/{prefix}xE_QMC_rs{rs:.1f}-n{Ne:d}.npz"
+        return f"./output/{prefix}E2_QMC_rs{rs:.1f}-n{Ne:d}.npz"
 
 
 def _subset_E(E_full, dE_full, full_qlist, full_vqlist, req_qlist, req_vqlist):
@@ -568,7 +568,6 @@ def _build_path(
     ts = rs / (12 * Ne**0.5) if wf == "sjb" else rs / 20
     tproj = tpmult * Ne * rs
     ss = 3 if wf == "sjb" else 2
-
     base = (
         f"{rs_n_dir}/"
         f"qv{q[0]:d}_{q[1]:d}_{q[2]:d}-vq{vq:.5f}/"

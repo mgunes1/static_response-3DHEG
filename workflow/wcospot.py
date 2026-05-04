@@ -31,7 +31,7 @@ def default_scf_input(thr='1.0d-8'):
 &electrons
  conv_thr = {thr}
  mixing_mode = 'local-TF'
- electron_maxstep = 300
+ electron_maxstep = 1500
 /
 
 ATOMIC_SPECIES
